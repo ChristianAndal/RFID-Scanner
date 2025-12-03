@@ -112,6 +112,38 @@ class RFIDReader {
         this.loadSettings();
         this.updateUI();
         this.updateSimulationModeIndicator();
+        this.logBluetoothStatus();
+    }
+    
+    // Log Bluetooth status for debugging
+    logBluetoothStatus() {
+        const compat = this.getBrowserCompatibilityInfo();
+        const hasBluetooth = this.isWebBluetoothAvailable();
+        
+        console.log('=== RFID Reader Bluetooth Status ===');
+        console.log('Browser:', compat.browser);
+        console.log('Protocol:', compat.protocol);
+        console.log('Is Secure (HTTPS/localhost):', compat.isSecure);
+        console.log('Web Bluetooth Available:', hasBluetooth);
+        console.log('Navigator.bluetooth exists:', compat.hasBluetooth);
+        console.log('Is Mobile:', compat.isMobile);
+        console.log('Is iOS:', compat.isIOS);
+        console.log('Is In-App Browser:', compat.isInAppBrowser);
+        console.log('Simulation Mode:', this.simulationMode);
+        
+        if (!hasBluetooth && !this.simulationMode) {
+            console.warn('⚠️ Web Bluetooth is not available. Users will see connection instructions when they try to connect.');
+            if (compat.isInAppBrowser) {
+                console.warn('💡 Tip: Open this page in Chrome, Edge, or Opera instead of the in-app browser.');
+            } else if (compat.isIOS) {
+                console.warn('💡 Tip: iOS Safari doesn\'t support Web Bluetooth. Use Chrome or Edge on iOS.');
+            } else if (!compat.isSecure) {
+                console.warn('💡 Tip: Web Bluetooth requires HTTPS. Deploy to Vercel or use https://localhost for testing.');
+            }
+        } else if (hasBluetooth) {
+            console.log('✅ Web Bluetooth is available and ready to use!');
+        }
+        console.log('=====================================');
     }
     
     // Detect best available connection method
@@ -121,7 +153,7 @@ class RFIDReader {
         }
         
         // Check what's available
-        const hasWebBluetooth = !!navigator.bluetooth;
+        const hasWebBluetooth = this.isWebBluetoothAvailable();
         
         // Auto-select best available method
         if (hasWebBluetooth) {
@@ -133,13 +165,64 @@ class RFIDReader {
         }
     }
     
+    // Check if Web Bluetooth is actually available (not just defined)
+    isWebBluetoothAvailable() {
+        // Check if navigator.bluetooth exists
+        if (!navigator.bluetooth) {
+            return false;
+        }
+        
+        // Check if we're on HTTPS or localhost (required for Web Bluetooth)
+        const isSecure = window.location.protocol === 'https:' || 
+                        window.location.hostname === 'localhost' || 
+                        window.location.hostname === '127.0.0.1';
+        
+        if (!isSecure) {
+            console.warn('Web Bluetooth requires HTTPS or localhost');
+            return false;
+        }
+        
+        // Check if it's actually supported (some browsers define it but don't support it)
+        try {
+            // Try to check if requestDevice is available
+            if (typeof navigator.bluetooth.requestDevice !== 'function') {
+                return false;
+            }
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+    
     // Get available connection methods
     getAvailableConnectionMethods() {
         const methods = [];
-        if (navigator.bluetooth) {
-            methods.push({ type: 'webluetooth', name: 'Web Bluetooth (Direct)', browsers: 'Chrome, Edge, Opera' });
+        if (this.isWebBluetoothAvailable()) {
+            methods.push({ type: 'webluetooth', name: 'Web Bluetooth (Direct)', browsers: 'Chrome, Edge, Opera (Desktop/Android)' });
         }
         return methods;
+    }
+    
+    // Get detailed browser compatibility info
+    getBrowserCompatibilityInfo() {
+        const ua = navigator.userAgent;
+        const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+        const isIOS = /iPhone|iPad|iPod/i.test(ua);
+        const isAndroid = /Android/i.test(ua);
+        const isInAppBrowser = /FBAN|FBAV|Instagram|Line|LinkedInApp|Messenger|Slack|Twitter/i.test(ua);
+        const protocol = window.location.protocol;
+        const isSecure = protocol === 'https:' || window.location.hostname === 'localhost';
+        
+        return {
+            browser: this.getBrowserName(),
+            isMobile,
+            isIOS,
+            isAndroid,
+            isInAppBrowser,
+            protocol,
+            isSecure,
+            hasBluetooth: !!navigator.bluetooth
+        };
     }
     
     updateSimulationModeIndicator() {
@@ -249,14 +332,17 @@ class RFIDReader {
         document.getElementById('deviceModal').style.display = 'block';
         this.updateConnectionMethodSelector();
         
+        // Check if Web Bluetooth is available
+        const hasBluetooth = this.isWebBluetoothAvailable();
+        
         // Auto-start scanning when modal opens
-        if (!this.simulationMode && this.connectionType === 'webluetooth' && navigator.bluetooth) {
+        if (!this.simulationMode && this.connectionType === 'webluetooth' && hasBluetooth) {
             this.autoScanDevices();
         } else if (this.simulationMode) {
             // Simulation mode - show history
             this.loadDeviceHistory();
         } else {
-            // Show connection method options
+            // Show connection method options or error message
             this.showConnectionMethodOptions();
         }
     }
@@ -290,15 +376,87 @@ class RFIDReader {
     showConnectionMethodOptions() {
         const deviceList = document.getElementById('deviceList');
         const methods = this.getAvailableConnectionMethods();
+        const compat = this.getBrowserCompatibilityInfo();
         
         if (methods.length === 0) {
-            deviceList.innerHTML = `<div style="padding: 20px; text-align: center; color: #ef4444;">
-                <strong>No Connection Methods Available</strong><br><br>
-                <div style="text-align: left; font-size: 12px;">
-                This browser doesn't support any connection methods.<br>
-                Please use a modern browser (Chrome, Edge, Firefox, Safari, Opera).
+            let errorMsg = '';
+            let instructions = '';
+            
+            // Customize error message based on browser/environment
+            if (compat.isInAppBrowser) {
+                errorMsg = 'Web Bluetooth Not Available in In-App Browser';
+                instructions = `
+                    <strong>Problem:</strong> You're using an in-app browser (like Messenger, Instagram, Facebook, etc.) which doesn't support Web Bluetooth.<br><br>
+                    <strong>Solution:</strong><br>
+                    1. Open this page in a regular browser (Chrome, Edge, or Opera)<br>
+                    2. On mobile: Copy the URL and paste it into Chrome or Edge<br>
+                    3. On desktop: Use Chrome, Edge, or Opera browser<br><br>
+                    <strong>Note:</strong> iOS Safari doesn't support Web Bluetooth. Use Chrome or Edge on iOS.
+                `;
+            } else if (compat.isIOS) {
+                errorMsg = 'Web Bluetooth Not Available on iOS Safari';
+                instructions = `
+                    <strong>Problem:</strong> iOS Safari doesn't support Web Bluetooth API.<br><br>
+                    <strong>Solution:</strong><br>
+                    1. Download and use <strong>Chrome</strong> or <strong>Edge</strong> browser on iOS<br>
+                    2. Open this page in Chrome/Edge on iOS<br>
+                    3. Web Bluetooth works in Chrome/Edge on iOS (but not Safari)<br><br>
+                    <strong>Alternative:</strong> Use a desktop computer with Chrome, Edge, or Opera.
+                `;
+            } else if (!compat.isSecure) {
+                errorMsg = 'HTTPS Required for Web Bluetooth';
+                instructions = `
+                    <strong>Problem:</strong> Web Bluetooth requires a secure connection (HTTPS).<br><br>
+                    <strong>Current protocol:</strong> ${compat.protocol}<br><br>
+                    <strong>Solution:</strong><br>
+                    This app needs to be served over HTTPS. When hosted on Vercel, HTTPS should be automatic.<br>
+                    If you're testing locally, use <code>https://localhost</code> or deploy to Vercel.
+                `;
+            } else if (!compat.hasBluetooth) {
+                errorMsg = 'Web Bluetooth Not Supported';
+                instructions = `
+                    <strong>Problem:</strong> This browser doesn't support Web Bluetooth API.<br><br>
+                    <strong>Current browser:</strong> ${compat.browser}<br>
+                    <strong>Protocol:</strong> ${compat.protocol}<br><br>
+                    <strong>Solution:</strong><br>
+                    1. Use <strong>Chrome</strong>, <strong>Edge</strong>, or <strong>Opera</strong> browser<br>
+                    2. Web Bluetooth is NOT supported in:<br>
+                       • Firefox<br>
+                       • Safari (desktop or mobile)<br>
+                       • In-app browsers (Messenger, Instagram, etc.)<br><br>
+                    <strong>Download:</strong><br>
+                    • <a href="https://www.google.com/chrome/" target="_blank" style="color: #667eea;">Chrome</a><br>
+                    • <a href="https://www.microsoft.com/edge" target="_blank" style="color: #667eea;">Edge</a>
+                `;
+            } else {
+                errorMsg = 'Web Bluetooth Not Available';
+                instructions = `
+                    <strong>Problem:</strong> Web Bluetooth is not available in this context.<br><br>
+                    <strong>Please try:</strong><br>
+                    1. Use Chrome, Edge, or Opera browser<br>
+                    2. Ensure you're on HTTPS or localhost<br>
+                    3. Make sure Bluetooth is enabled on your device<br>
+                    4. Check browser console (F12) for detailed errors
+                `;
+            }
+            
+            deviceList.innerHTML = `
+                <div style="padding: 20px; text-align: center;">
+                    <div style="color: #ef4444; font-size: 16px; font-weight: 600; margin-bottom: 15px;">
+                        ${errorMsg}
+                    </div>
+                    <div style="text-align: left; font-size: 13px; color: #374151; background: #f9fafb; padding: 15px; border-radius: 8px; margin-top: 15px; line-height: 1.6;">
+                        ${instructions}
+                    </div>
+                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #6b7280;">
+                        <strong>Technical Details:</strong><br>
+                        Browser: ${compat.browser} | 
+                        Mobile: ${compat.isMobile ? 'Yes' : 'No'} | 
+                        Protocol: ${compat.protocol} | 
+                        Bluetooth API: ${compat.hasBluetooth ? 'Available' : 'Not Available'}
+                    </div>
                 </div>
-            </div>`;
+            `;
             return;
         }
         
@@ -341,7 +499,17 @@ class RFIDReader {
     async autoScanDevices() {
         // Automatically show available devices
         const deviceList = document.getElementById('deviceList');
-        deviceList.innerHTML = '<div style="padding: 20px; text-align: center;">Ready to scan for nearby Bluetooth devices...<br><br>Click "Scan for Devices" to start</div>';
+        const compat = this.getBrowserCompatibilityInfo();
+        
+        let message = '<div style="padding: 20px; text-align: center;">';
+        message += '<div style="color: #10b981; font-size: 14px; font-weight: 600; margin-bottom: 10px;">✓ Web Bluetooth Ready</div>';
+        message += 'Ready to scan for nearby Bluetooth devices...<br><br>';
+        message += 'Click <strong>"Scan for Devices"</strong> to start';
+        message += '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #6b7280;">';
+        message += '<strong>Browser:</strong> ' + compat.browser + ' | <strong>Protocol:</strong> ' + compat.protocol;
+        message += '</div></div>';
+        
+        deviceList.innerHTML = message;
     }
 
     async scanDevices() {
@@ -407,38 +575,58 @@ class RFIDReader {
                 btnScan.disabled = false;
                 btnScan.textContent = 'Scan for Devices';
                 
+                const compat = this.getBrowserCompatibilityInfo();
+                
                 if (error.name === 'NotFoundError') {
                     deviceList.innerHTML = `<div style="padding: 20px; text-align: center; color: #6b7280;">
                         <strong>No devices found</strong><br><br>
-                        <div style="text-align: left; display: inline-block;">
+                        <div style="text-align: left; display: inline-block; font-size: 13px;">
                         • Make sure your RFID reader is powered on<br>
                         • Ensure device is in pairing/discoverable mode<br>
                         • Check if device supports Bluetooth Low Energy (BLE)<br>
                         • Move closer to the device<br>
                         • Try turning the device off and on<br>
-                        • Check your device's Bluetooth settings
+                        • Check your device's Bluetooth settings<br>
+                        • Some devices need to be paired in system Bluetooth settings first
+                        </div>
+                    </div>`;
+                } else if (error.name === 'SecurityError') {
+                    deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
+                        <strong>Security Error</strong><br><br>
+                        <div style="text-align: left; font-size: 13px;">
+                        <strong>Problem:</strong> Web Bluetooth requires HTTPS or localhost.<br><br>
+                        <strong>Current protocol:</strong> ${compat.protocol}<br><br>
+                        <strong>Solution:</strong><br>
+                        • If on Vercel, HTTPS should be automatic - check the URL starts with https://<br>
+                        • If testing locally, use https://localhost or deploy to Vercel<br>
+                        • Make sure you're not accessing via http://
                         </div>
                     </div>`;
                 } else if (error.name === 'NotSupportedError' || error.message.includes('not supported')) {
+                    this.showConnectionMethodOptions(); // Show detailed compatibility info
+                } else if (error.name === 'NotAllowedError') {
                     deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
-                        <strong>Web Bluetooth Not Available</strong><br><br>
-                        <div style="text-align: left; font-size: 12px;">
-                        <strong>Web Bluetooth is not supported in this browser.</strong><br><br>
-                        <strong>Current browser:</strong> ${this.getBrowserName()}<br>
-                        <strong>Web Bluetooth available:</strong> ${navigator.bluetooth ? 'Yes' : 'No'}<br>
-                        <strong>Protocol:</strong> ${window.location.protocol}<br><br>
-                        Please use a browser that supports Web Bluetooth (Chrome, Edge, Opera).
+                        <strong>Permission Denied</strong><br><br>
+                        <div style="text-align: left; font-size: 13px;">
+                        <strong>Problem:</strong> Bluetooth access was denied.<br><br>
+                        <strong>Solution:</strong><br>
+                        • Click "Scan for Devices" again and allow Bluetooth access<br>
+                        • Check browser permissions for this site<br>
+                        • Make sure Bluetooth is enabled on your device<br>
+                        • On some browsers, you need to enable Bluetooth in site settings
                         </div>
                     </div>`;
                 } else {
                     deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
-                        <strong>Error:</strong> ${error.message}<br><br>
-                        <div style="text-align: left; font-size: 12px;">
+                        <strong>Error:</strong> ${error.message || error.name}<br><br>
+                        <div style="text-align: left; font-size: 13px;">
                         <strong>Troubleshooting:</strong><br>
                         • Ensure device is powered on and in range<br>
                         • Check if device supports BLE (Bluetooth Low Energy)<br>
-                        • Page must be served over HTTPS or localhost<br>
-                        • Check browser console (F12) for detailed error messages
+                        • Page must be served over HTTPS (Vercel provides this automatically)<br>
+                        • Check browser console (F12) for detailed error messages<br>
+                        • Try refreshing the page and scanning again<br><br>
+                        <strong>Browser:</strong> ${compat.browser} | <strong>Protocol:</strong> ${compat.protocol}
                         </div>
                     </div>`;
                 }
