@@ -145,9 +145,6 @@ class RFIDReader {
         if (navigator.bluetooth) {
             methods.push({ type: 'webluetooth', name: 'Web Bluetooth (Direct)', browsers: 'Chrome, Edge, Opera' });
         }
-        if (typeof WebSocket !== 'undefined') {
-            methods.push({ type: 'websocket', name: 'WebSocket Bridge', browsers: 'All Browsers' });
-        }
         return methods;
     }
     
