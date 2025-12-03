@@ -19,7 +19,8 @@ class RFIDReader {
         };
         this.startTime = null;
         this.scanInterval = null;
-        this.simulationMode = false; // Set to true for simulation mode, false for real Web Bluetooth
+        // Automatically enable simulation mode if Web Bluetooth is not available
+        this.simulationMode = !navigator.bluetooth; // Enable simulation if Web Bluetooth not supported
         
         // Bluetooth service UUIDs (from Android app)
         this.SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
@@ -107,6 +108,16 @@ class RFIDReader {
         this.setupEventListeners();
         this.loadSettings();
         this.updateUI();
+        this.updateSimulationModeIndicator();
+    }
+    
+    updateSimulationModeIndicator() {
+        const deviceInfo = document.getElementById('deviceInfo');
+        if (this.simulationMode) {
+            if (!deviceInfo.textContent.includes('Simulation Mode')) {
+                deviceInfo.innerHTML = '<span style="color: #0ea5e9;">📱 Simulation Mode</span> - ' + deviceInfo.textContent;
+            }
+        }
     }
 
     setupEventListeners() {
@@ -208,6 +219,18 @@ class RFIDReader {
         if (!this.simulationMode && navigator.bluetooth) {
             this.autoScanDevices();
         } else {
+            // Show simulation mode notice if active
+            if (this.simulationMode) {
+                const deviceList = document.getElementById('deviceList');
+                deviceList.innerHTML = `<div style="padding: 20px; text-align: center;">
+                    <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+                        <strong style="color: #0369a1;">📱 Simulation Mode</strong><br>
+                        <div style="font-size: 12px; margin-top: 8px; color: #075985;">
+                            Web Bluetooth not available. Click "Scan for Devices" to test with simulated devices.
+                        </div>
+                    </div>
+                </div>`;
+            }
             this.loadDeviceHistory();
         }
     }
@@ -265,7 +288,20 @@ class RFIDReader {
         } else {
             try {
                 if (!navigator.bluetooth) {
-                    throw new Error('Web Bluetooth API not supported in this browser. Please use Chrome, Edge, or Opera.');
+                    // Web Bluetooth not available - automatically use simulation mode
+                    this.simulationMode = true;
+                    deviceList.innerHTML = `<div style="padding: 20px; text-align: center; color: #6b7280;">
+                        <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+                            <strong style="color: #0369a1;">📱 Simulation Mode Active</strong><br>
+                            <div style="font-size: 12px; margin-top: 8px; color: #075985;">
+                                Web Bluetooth is not supported in this browser. The app is running in simulation mode for testing purposes.
+                            </div>
+                        </div>
+                        <div style="margin-top: 15px;">Click "Scan for Devices" to see simulated devices</div>
+                    </div>`;
+                    btnScan.disabled = false;
+                    btnScan.textContent = 'Scan for Devices';
+                    return;
                 }
 
                 // Show the browser's device picker
@@ -297,14 +333,16 @@ class RFIDReader {
                         </div>
                     </div>`;
                 } else if (error.name === 'NotSupportedError') {
-                    deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
-                        <strong>Web Bluetooth not available</strong><br><br>
-                        <div style="text-align: left;">
-                        Possible reasons:<br>
-                        • Browser doesn't support Web Bluetooth (use Chrome/Edge/Opera)<br>
-                        • Page must be HTTPS or localhost<br>
-                        • Bluetooth may be disabled on your computer
+                    // Fallback to simulation mode
+                    this.simulationMode = true;
+                    deviceList.innerHTML = `<div style="padding: 20px; text-align: center; color: #6b7280;">
+                        <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+                            <strong style="color: #0369a1;">📱 Simulation Mode Active</strong><br>
+                            <div style="font-size: 12px; margin-top: 8px; color: #075985;">
+                                Web Bluetooth not available. Running in simulation mode.
+                            </div>
                         </div>
+                        <div style="margin-top: 15px;">Click "Scan for Devices" to see simulated devices</div>
                     </div>`;
                 } else {
                     deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
@@ -315,7 +353,7 @@ class RFIDReader {
                         • Check if device supports BLE (Bluetooth Low Energy)<br>
                         • Use Chrome/Edge/Opera browser<br>
                         • Page must be served over HTTPS or localhost<br>
-                        • Try enabling simulation mode in app.js
+                        • The app will automatically use simulation mode if Web Bluetooth is unavailable
                         </div>
                     </div>`;
                 }
@@ -671,7 +709,16 @@ class RFIDReader {
 
         statusEl.className = `status ${status}`;
         statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-        infoEl.textContent = info;
+        
+        // Add simulation mode indicator
+        if (this.simulationMode && status === 'disconnected') {
+            infoEl.innerHTML = '<span style="color: #0ea5e9;">📱 Simulation Mode</span> - ' + info;
+        } else if (this.simulationMode && this.isConnected) {
+            infoEl.innerHTML = '<span style="color: #0ea5e9;">📱 Simulation Mode</span> - ' + info;
+        } else {
+            infoEl.textContent = info;
+        }
+        
         btnConnect.textContent = this.isConnected ? 'Disconnect' : 'Connect';
     }
 
