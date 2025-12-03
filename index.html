@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFID UHF Reader - Web Application</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1>RFID UHF Reader</h1>
+                <div class="connection-info">
+                    <div id="deviceStatus" class="status disconnected">Disconnected</div>
+                    <div id="deviceInfo" class="device-info">No device connected</div>
+                </div>
+                <div class="header-buttons">
+                    <button id="btnConnect" class="btn btn-primary">Connect</button>
+                    <button id="btnSearch" class="btn btn-secondary">Search</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="inventory">Inventory</button>
+            <button class="tab-btn" data-tab="barcode">2D Scan</button>
+            <button class="tab-btn" data-tab="settings">Settings</button>
+            <button class="tab-btn" data-tab="location">Location</button>
+            <button class="tab-btn" data-tab="read">Read</button>
+            <button class="tab-btn" data-tab="write">Write</button>
+            <button class="tab-btn" data-tab="lock">Lock</button>
+            <button class="tab-btn" data-tab="kill">Kill</button>
+            <button class="tab-btn" data-tab="erase">Erase</button>
+        </div>
+
+        <!-- Tab Contents -->
+        <div class="tab-content active" id="inventory">
+            <div class="filter-section">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="cbFilter">
+                    Enable Filter
+                </label>
+                <div id="filterPanel" class="filter-panel" style="display: none;">
+                    <div class="form-group">
+                        <label>Pointer (bit):</label>
+                        <input type="number" id="etPtr" value="32" class="input-small">
+                    </div>
+                    <div class="form-group">
+                        <label>Length (bit):</label>
+                        <input type="number" id="etLen" value="0" class="input-small">
+                    </div>
+                    <div class="form-group">
+                        <label>Data (Hex):</label>
+                        <input type="text" id="etData" placeholder="Hex data" class="input-medium">
+                    </div>
+                    <div class="radio-group">
+                        <label><input type="radio" name="filterBank" value="EPC" checked> EPC</label>
+                        <label><input type="radio" name="filterBank" value="TID"> TID</label>
+                        <label><input type="radio" name="filterBank" value="USER"> USER</label>
+                    </div>
+                    <button id="btnSetFilter" class="btn btn-small">Set Filter</button>
+                </div>
+            </div>
+
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <span class="stat-label">Count:</span>
+                    <span id="tvCount" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Total:</span>
+                    <span id="tvTotal" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Time:</span>
+                    <span id="tvTime" class="stat-value">0s</span>
+                </div>
+            </div>
+
+            <div class="tag-list-container">
+                <table class="tag-table">
+                    <thead>
+                        <tr>
+                            <th>EPC/TID</th>
+                            <th>Count</th>
+                            <th>RSSI</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tagListBody">
+                        <!-- Tags will be added here -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="action-buttons">
+                <button id="btnInventorySingle" class="btn btn-action">Single Read</button>
+                <button id="btnInventoryLoop" class="btn btn-action">Loop Read</button>
+                <button id="btnStop" class="btn btn-action btn-danger" disabled>Stop</button>
+                <button id="btnClear" class="btn btn-action">Clear</button>
+            </div>
+        </div>
+
+        <div class="tab-content" id="barcode">
+            <div class="barcode-section">
+                <h2>2D Barcode Scanner</h2>
+                <div class="form-group">
+                    <label>Barcode Data:</label>
+                    <input type="text" id="barcodeInput" class="input-full" placeholder="Scan or enter barcode">
+                </div>
+                <button id="btnScanBarcode" class="btn btn-primary">Scan Barcode</button>
+                <div id="barcodeResult" class="result-display"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="settings">
+            <div class="settings-section">
+                <h2>Reader Settings</h2>
+                
+                <div class="setting-group">
+                    <h3>Power</h3>
+                    <div class="form-row">
+                        <select id="spPower" class="select-input">
+                            <option>20</option>
+                            <option>21</option>
+                            <option>22</option>
+                            <option>23</option>
+                            <option>24</option>
+                            <option>25</option>
+                            <option>26</option>
+                            <option>27</option>
+                            <option>28</option>
+                            <option>29</option>
+                            <option>30</option>
+                        </select>
+                        <button id="btnGetPower" class="btn btn-small">Get</button>
+                        <button id="btnSetPower" class="btn btn-small">Set</button>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>Frequency Mode</h3>
+                    <div class="form-row">
+                        <select id="spFrequency" class="select-input">
+                            <option>China Standard 1</option>
+                            <option>China Standard 2</option>
+                            <option>Europe Standard</option>
+                            <option>United States Standard</option>
+                            <option>Korea</option>
+                            <option>Japan</option>
+                        </select>
+                        <button id="btnGetFrequency" class="btn btn-small">Get</button>
+                        <button id="btnSetFrequency" class="btn btn-small">Set</button>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>Protocol</h3>
+                    <div class="form-row">
+                        <select id="spProtocol" class="select-input">
+                            <option>Auto</option>
+                            <option>ISO18000-6B</option>
+                            <option>ISO18000-6C</option>
+                        </select>
+                        <button id="btnGetProtocol" class="btn btn-small">Get</button>
+                        <button id="btnSetProtocol" class="btn btn-small">Set</button>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>Beep</h3>
+                    <div class="form-row">
+                        <button id="btnBeepOpen" class="btn btn-small">Enable</button>
+                        <button id="btnBeepClose" class="btn btn-small">Disable</button>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>Other Settings</h3>
+                    <div class="form-row">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="cbTagFocus"> Tag Focus
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="cbRssi"> RSSI Support
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="cbAutoReconnect"> Auto Reconnect
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="location">
+            <div class="location-section">
+                <h2>Tag Location</h2>
+                <canvas id="locationCanvas" width="400" height="400"></canvas>
+                <div class="location-controls">
+                    <button id="btnStartLocation" class="btn btn-primary">Start Location</button>
+                    <button id="btnStopLocation" class="btn btn-danger">Stop Location</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="read">
+            <div class="read-section">
+                <h2>Read Tag Data</h2>
+                <div class="form-group">
+                    <label>Bank:</label>
+                    <select id="spReadBank" class="select-input">
+                        <option>EPC</option>
+                        <option>RESERVED</option>
+                        <option>TID</option>
+                        <option>USER</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Pointer:</label>
+                    <input type="number" id="etReadPtr" value="2" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Length:</label>
+                    <input type="number" id="etReadLen" value="6" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Access Password:</label>
+                    <input type="text" id="etReadPwd" value="00000000" maxlength="8" class="input-medium">
+                </div>
+                <button id="btnRead" class="btn btn-primary">Read</button>
+                <div id="readResult" class="result-display"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="write">
+            <div class="write-section">
+                <h2>Write Tag Data</h2>
+                <div class="form-group">
+                    <label>Bank:</label>
+                    <select id="spWriteBank" class="select-input">
+                        <option>EPC</option>
+                        <option>RESERVED</option>
+                        <option>TID</option>
+                        <option>USER</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Pointer:</label>
+                    <input type="number" id="etWritePtr" value="2" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Length:</label>
+                    <input type="number" id="etWriteLen" value="6" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Data (Hex):</label>
+                    <input type="text" id="etWriteData" placeholder="Hex data" class="input-full">
+                </div>
+                <div class="form-group">
+                    <label>Access Password:</label>
+                    <input type="text" id="etWritePwd" value="00000000" maxlength="8" class="input-medium">
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="cbWriteFilter"> Use Filter
+                </label>
+                <div id="writeFilterPanel" class="filter-panel" style="display: none;">
+                    <div class="form-group">
+                        <label>Filter Pointer:</label>
+                        <input type="number" id="etWriteFilterPtr" value="32" class="input-small">
+                    </div>
+                    <div class="form-group">
+                        <label>Filter Length:</label>
+                        <input type="number" id="etWriteFilterLen" value="0" class="input-small">
+                    </div>
+                    <div class="form-group">
+                        <label>Filter Data:</label>
+                        <input type="text" id="etWriteFilterData" placeholder="Hex data" class="input-medium">
+                    </div>
+                </div>
+                <button id="btnWrite" class="btn btn-primary">Write</button>
+                <div id="writeResult" class="result-display"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="lock">
+            <div class="lock-section">
+                <h2>Lock Tag</h2>
+                <div class="form-group">
+                    <label>Access Password:</label>
+                    <input type="text" id="etLockPwd" value="00000000" maxlength="8" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Lock Action:</label>
+                    <select id="spLockAction" class="select-input">
+                        <option>Open</option>
+                        <option>Lock</option>
+                        <option>Perma Lock</option>
+                        <option>Perma Open</option>
+                    </select>
+                </div>
+                <button id="btnLock" class="btn btn-primary">Lock</button>
+                <div id="lockResult" class="result-display"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="kill">
+            <div class="kill-section">
+                <h2>Kill Tag</h2>
+                <div class="form-group">
+                    <label>Kill Password:</label>
+                    <input type="text" id="etKillPwd" value="00000000" maxlength="8" class="input-medium">
+                </div>
+                <button id="btnKill" class="btn btn-danger">Kill Tag</button>
+                <div id="killResult" class="result-display"></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="erase">
+            <div class="erase-section">
+                <h2>Erase Tag</h2>
+                <div class="form-group">
+                    <label>Bank:</label>
+                    <select id="spEraseBank" class="select-input">
+                        <option>EPC</option>
+                        <option>RESERVED</option>
+                        <option>TID</option>
+                        <option>USER</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Pointer:</label>
+                    <input type="number" id="etErasePtr" value="0" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Length:</label>
+                    <input type="number" id="etEraseLen" value="6" class="input-medium">
+                </div>
+                <div class="form-group">
+                    <label>Access Password:</label>
+                    <input type="text" id="etErasePwd" value="00000000" maxlength="8" class="input-medium">
+                </div>
+                <button id="btnErase" class="btn btn-danger">Erase</button>
+                <div id="eraseResult" class="result-display"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Device Selection Modal -->
+    <div id="deviceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Select Device</h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <button id="btnScanDevices" class="btn btn-primary">Scan for Devices</button>
+                <button id="btnClearHistory" class="btn btn-secondary">Clear History</button>
+                <div id="deviceList" class="device-list">
+                    <!-- Devices will be listed here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
