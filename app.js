@@ -19,8 +19,7 @@ class RFIDReader {
         };
         this.startTime = null;
         this.scanInterval = null;
-        // Automatically enable simulation mode if Web Bluetooth is not available
-        this.simulationMode = !navigator.bluetooth; // Enable simulation if Web Bluetooth not supported
+        this.simulationMode = false; // Real hardware mode - set to true only for testing without hardware
         
         // Bluetooth service UUIDs (from Android app)
         this.SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
@@ -112,9 +111,10 @@ class RFIDReader {
     }
     
     updateSimulationModeIndicator() {
-        const deviceInfo = document.getElementById('deviceInfo');
+        // Only show simulation indicator if simulation mode is actually enabled
         if (this.simulationMode) {
-            if (!deviceInfo.textContent.includes('Simulation Mode')) {
+            const deviceInfo = document.getElementById('deviceInfo');
+            if (deviceInfo && !deviceInfo.textContent.includes('Simulation Mode')) {
                 deviceInfo.innerHTML = '<span style="color: #0ea5e9;">📱 Simulation Mode</span> - ' + deviceInfo.textContent;
             }
         }
@@ -218,21 +218,35 @@ class RFIDReader {
         // Auto-start scanning when modal opens
         if (!this.simulationMode && navigator.bluetooth) {
             this.autoScanDevices();
-        } else {
-            // Show simulation mode notice if active
-            if (this.simulationMode) {
-                const deviceList = document.getElementById('deviceList');
-                deviceList.innerHTML = `<div style="padding: 20px; text-align: center;">
-                    <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
-                        <strong style="color: #0369a1;">📱 Simulation Mode</strong><br>
-                        <div style="font-size: 12px; margin-top: 8px; color: #075985;">
-                            Web Bluetooth not available. Click "Scan for Devices" to test with simulated devices.
-                        </div>
-                    </div>
-                </div>`;
-            }
+        } else if (this.simulationMode) {
+            // Simulation mode - show history
             this.loadDeviceHistory();
+        } else {
+            // Real mode but Web Bluetooth not available - show helpful message
+            const deviceList = document.getElementById('deviceList');
+            deviceList.innerHTML = `<div style="padding: 20px; text-align: center;">
+                <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+                    <strong style="color: #92400e;">⚠️ Web Bluetooth Not Available</strong><br>
+                    <div style="font-size: 12px; margin-top: 8px; color: #78350f; text-align: left;">
+                        <strong>To use real hardware:</strong><br>
+                        • Use Chrome, Edge, or Opera browser<br>
+                        • Ensure page is served over HTTPS or localhost<br>
+                        • Make sure Bluetooth is enabled on your device<br><br>
+                        <strong>Current browser:</strong> ${this.getBrowserName()}
+                    </div>
+                </div>
+            </div>`;
         }
+    }
+    
+    getBrowserName() {
+        const ua = navigator.userAgent;
+        if (ua.includes('Chrome') && !ua.includes('Edg')) return 'Chrome';
+        if (ua.includes('Edg')) return 'Edge';
+        if (ua.includes('Opera') || ua.includes('OPR')) return 'Opera';
+        if (ua.includes('Firefox')) return 'Firefox';
+        if (ua.includes('Safari') && !ua.includes('Chrome')) return 'Safari';
+        return 'Unknown';
     }
 
     hideDeviceModal() {
@@ -288,20 +302,7 @@ class RFIDReader {
         } else {
             try {
                 if (!navigator.bluetooth) {
-                    // Web Bluetooth not available - automatically use simulation mode
-                    this.simulationMode = true;
-                    deviceList.innerHTML = `<div style="padding: 20px; text-align: center; color: #6b7280;">
-                        <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
-                            <strong style="color: #0369a1;">📱 Simulation Mode Active</strong><br>
-                            <div style="font-size: 12px; margin-top: 8px; color: #075985;">
-                                Web Bluetooth is not supported in this browser. The app is running in simulation mode for testing purposes.
-                            </div>
-                        </div>
-                        <div style="margin-top: 15px;">Click "Scan for Devices" to see simulated devices</div>
-                    </div>`;
-                    btnScan.disabled = false;
-                    btnScan.textContent = 'Scan for Devices';
-                    return;
+                    throw new Error('Web Bluetooth API not supported in this browser. Please use Chrome, Edge, or Opera.');
                 }
 
                 // Show the browser's device picker
@@ -329,20 +330,23 @@ class RFIDReader {
                         • Ensure device is in pairing/discoverable mode<br>
                         • Check if device supports Bluetooth Low Energy (BLE)<br>
                         • Move closer to the device<br>
-                        • Try turning the device off and on
+                        • Try turning the device off and on<br>
+                        • Check your device's Bluetooth settings
                         </div>
                     </div>`;
-                } else if (error.name === 'NotSupportedError') {
-                    // Fallback to simulation mode
-                    this.simulationMode = true;
-                    deviceList.innerHTML = `<div style="padding: 20px; text-align: center; color: #6b7280;">
-                        <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
-                            <strong style="color: #0369a1;">📱 Simulation Mode Active</strong><br>
-                            <div style="font-size: 12px; margin-top: 8px; color: #075985;">
-                                Web Bluetooth not available. Running in simulation mode.
-                            </div>
+                } else if (error.name === 'NotSupportedError' || error.message.includes('not supported')) {
+                    deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
+                        <strong>Web Bluetooth Not Available</strong><br><br>
+                        <div style="text-align: left; font-size: 12px;">
+                        <strong>Requirements for real hardware:</strong><br>
+                        • Browser: Chrome, Edge, or Opera (not Safari/Firefox)<br>
+                        • HTTPS connection or localhost<br>
+                        • Bluetooth enabled on your device<br>
+                        • RFID device must support BLE (Bluetooth Low Energy)<br><br>
+                        <strong>Current browser:</strong> ${this.getBrowserName()}<br>
+                        <strong>Web Bluetooth available:</strong> ${navigator.bluetooth ? 'Yes' : 'No'}<br>
+                        <strong>Protocol:</strong> ${window.location.protocol}
                         </div>
-                        <div style="margin-top: 15px;">Click "Scan for Devices" to see simulated devices</div>
                     </div>`;
                 } else {
                     deviceList.innerHTML = `<div style="padding: 20px; color: #ef4444;">
@@ -353,7 +357,7 @@ class RFIDReader {
                         • Check if device supports BLE (Bluetooth Low Energy)<br>
                         • Use Chrome/Edge/Opera browser<br>
                         • Page must be served over HTTPS or localhost<br>
-                        • The app will automatically use simulation mode if Web Bluetooth is unavailable
+                        • Check browser console (F12) for detailed error messages
                         </div>
                     </div>`;
                 }
@@ -710,10 +714,8 @@ class RFIDReader {
         statusEl.className = `status ${status}`;
         statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
         
-        // Add simulation mode indicator
-        if (this.simulationMode && status === 'disconnected') {
-            infoEl.innerHTML = '<span style="color: #0ea5e9;">📱 Simulation Mode</span> - ' + info;
-        } else if (this.simulationMode && this.isConnected) {
+        // Add simulation mode indicator only if simulation is active
+        if (this.simulationMode) {
             infoEl.innerHTML = '<span style="color: #0ea5e9;">📱 Simulation Mode</span> - ' + info;
         } else {
             infoEl.textContent = info;
