@@ -365,7 +365,35 @@ class RFIDReader {
     async autoScanDevices() {
         // Automatically show available devices
         const deviceList = document.getElementById('deviceList');
-        deviceList.innerHTML = '<div style="padding: 20px; text-align: center;">Ready to scan for nearby Bluetooth devices...<br><br>Click "Scan for Devices" to start</div>';
+        const useAutoDiscover = localStorage.getItem('useAutoDiscover') === 'true';
+        
+        let html = `
+            <div style="padding: 20px; text-align: center;">
+                <div style="margin-bottom: 15px;">
+                    <label style="display: flex; align-items: center; justify-content: center; gap: 10px; cursor: pointer; padding: 10px; background: ${useAutoDiscover ? '#f0f4ff' : '#f9fafb'}; border-radius: 6px; border: 2px solid ${useAutoDiscover ? '#667eea' : '#e5e7eb'};">
+                        <input type="checkbox" id="autoDiscoverToggle" ${useAutoDiscover ? 'checked' : ''} 
+                               onchange="window.rfidReader.toggleAutoDiscover(this.checked)"
+                               style="width: 18px; height: 18px; cursor: pointer;">
+                        <div style="text-align: left;">
+                            <div style="font-weight: 600; color: ${useAutoDiscover ? '#667eea' : '#374151'};">🔍 Auto-Discover Mode</div>
+                            <div style="font-size: 11px; color: #6b7280;">Automatically find the right service and characteristic</div>
+                        </div>
+                    </label>
+                </div>
+                Ready to scan for nearby Bluetooth devices...<br><br>Click "Scan for Devices" to start
+            </div>
+        `;
+        deviceList.innerHTML = html;
+    }
+    
+    // Toggle auto-discover mode
+    toggleAutoDiscover(enabled) {
+        localStorage.setItem('useAutoDiscover', enabled ? 'true' : 'false');
+        if (enabled) {
+            this.showToast('✅ Auto-Discover mode enabled - UUIDs will be found automatically');
+        } else {
+            this.showToast('Auto-Discover mode disabled');
+        }
     }
 
     async scanDevices() {
@@ -556,6 +584,14 @@ class RFIDReader {
         this.hideDeviceModal();
         this.updateConnectionStatus('connecting', `Connecting to ${device.name}...`);
         
+        // Check if user wants auto-discover mode
+        const useAutoDiscover = localStorage.getItem('useAutoDiscover') === 'true';
+        
+        if (useAutoDiscover) {
+            await this.connectWithAutoDiscover(device);
+            return;
+        }
+        
         try {
             console.log('Connecting to GATT server...');
             const server = await device.gatt.connect();
@@ -572,7 +608,7 @@ class RFIDReader {
                 const services = await server.getPrimaryServices();
                 console.log('Available services:', services.map(s => ({ uuid: s.uuid })));
                 
-                // Show service selection UI
+                // Show service selection UI with auto-discover option
                 await this.showServiceSelectionUI(device, server, services, serviceError.message);
                 return;
             }
@@ -587,7 +623,7 @@ class RFIDReader {
                 const characteristics = await service.getCharacteristics();
                 console.log('Available characteristics:', characteristics.map(c => ({ uuid: c.uuid, properties: c.properties })));
                 
-                // Show characteristic selection UI
+                // Show characteristic selection UI with auto-discover option
                 await this.showCharacteristicSelectionUI(device, service, characteristics, charError.message);
                 return;
             }
@@ -616,6 +652,109 @@ class RFIDReader {
         }
     }
     
+    // Auto-discover connection method - tries to find the right service/characteristic automatically
+    async connectWithAutoDiscover(device) {
+        this.updateConnectionStatus('connecting', `Auto-discovering ${device.name}...`);
+        
+        try {
+            console.log('Auto-discover: Connecting to GATT server...');
+            const server = await device.gatt.connect();
+            
+            // Common UUIDs to try
+            const commonServiceUUIDs = [
+                '0000fff0-0000-1000-8000-00805f9b34fb', // Standard RFID
+                '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART
+                '0000fff0-0000-1000-8000-00805f9b34fb'  // Alternative
+            ];
+            
+            const commonCharUUIDs = [
+                '0000fff1-0000-1000-8000-00805f9b34fb', // Standard RFID
+                '6e400003-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART RX (Notify)
+                '6e400002-b5a3-f393-e0a9-e50e24dcca9e'  // Nordic UART TX (Write)
+            ];
+            
+            // First, discover all services
+            console.log('Auto-discover: Discovering all services...');
+            const allServices = await server.getPrimaryServices();
+            console.log('Found services:', allServices.map(s => s.uuid));
+            
+            // Try each service
+            for (const service of allServices) {
+                console.log(`Trying service: ${service.uuid}`);
+                
+                try {
+                    // Discover all characteristics in this service
+                    const characteristics = await service.getCharacteristics();
+                    console.log(`Found ${characteristics.length} characteristics in service ${service.uuid}`);
+                    
+                    // Look for a characteristic with notify property
+                    for (const char of characteristics) {
+                        console.log(`Checking characteristic: ${char.uuid}, properties:`, {
+                            read: char.properties.read,
+                            write: char.properties.write,
+                            notify: char.properties.notify,
+                            indicate: char.properties.indicate
+                        });
+                        
+                        // Prefer characteristics with notify (for receiving data)
+                        if (char.properties.notify || char.properties.indicate) {
+                            console.log(`✅ Found suitable characteristic: ${char.uuid} (has notify/indicate)`);
+                            
+                            try {
+                                // Try to enable notifications
+                                await char.startNotifications();
+                                char.addEventListener('characteristicvaluechanged', (event) => {
+                                    this.handleNotification(event);
+                                });
+                                
+                                // Success! Use this service and characteristic
+                                this.device = device;
+                                this.server = service;
+                                this.characteristic = char;
+                                this.SERVICE_UUID = service.uuid;
+                                this.CHARACTERISTIC_UUID = char.uuid;
+                                
+                                // Save for future use
+                                localStorage.setItem('customServiceUUID', service.uuid);
+                                localStorage.setItem('customCharUUID', char.uuid);
+                                
+                                this.isConnected = true;
+                                this.updateConnectionStatus('connected', `${device.name || 'Device'} (Auto-discovered)`);
+                                this.updateUI();
+                                this.showToast('✅ Connected! Auto-discovered service and characteristic');
+                                console.log('✅ Auto-discover connection successful!');
+                                
+                                device.addEventListener('gattserverdisconnected', () => {
+                                    this.handleDisconnection();
+                                });
+                                
+                                return; // Success!
+                            } catch (notifyError) {
+                                console.warn(`Could not enable notifications on ${char.uuid}:`, notifyError);
+                                continue;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.warn(`Error accessing service ${service.uuid}:`, error);
+                    continue;
+                }
+            }
+            
+            // If we get here, we couldn't auto-discover
+            console.warn('Auto-discover failed: No suitable service/characteristic found');
+            this.updateConnectionStatus('disconnected', 'Auto-discover failed');
+            
+            // Show manual selection UI
+            await this.showServiceSelectionUI(device, server, allServices, 'Auto-discover could not find a suitable service. Please select manually.');
+            
+        } catch (error) {
+            console.error('Auto-discover error:', error);
+            this.updateConnectionStatus('disconnected', 'Auto-discover failed');
+            this.showToast('Auto-discover failed: ' + error.message);
+        }
+    }
+    
     // Show UI for selecting service when expected one not found
     async showServiceSelectionUI(device, server, availableServices, errorMessage) {
         const deviceList = document.getElementById('deviceList');
@@ -623,6 +762,19 @@ class RFIDReader {
         
         let html = `
             <div style="padding: 20px;">
+                <div style="background: #e0f2fe; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 2px solid #0ea5e9;">
+                    <div style="font-weight: 600; color: #0369a1; margin-bottom: 8px; font-size: 15px;">
+                        🔍 Try Auto-Discover?
+                    </div>
+                    <div style="font-size: 12px; color: #0c4a6e; margin-bottom: 10px;">
+                        Let the app automatically find the right service and characteristic for you!
+                    </div>
+                    <button onclick="window.rfidReader.connectWithAutoDiscover(window.rfidReader.pendingDevice)" 
+                            class="btn btn-primary" 
+                            style="width: 100%; padding: 12px; font-weight: 600;">
+                        🔍 Auto-Discover Service & Characteristic
+                    </button>
+                </div>
                 <div style="color: #ef4444; font-weight: 600; margin-bottom: 15px; font-size: 16px;">
                     ⚠️ Service UUID Not Found
                 </div>
@@ -632,7 +784,7 @@ class RFIDReader {
                     <strong>Error:</strong> ${errorMessage}
                 </div>
                 <div style="margin-bottom: 15px;">
-                    <strong style="display: block; margin-bottom: 10px;">Available Services on this device:</strong>
+                    <strong style="display: block; margin-bottom: 10px;">Or manually select from available services:</strong>
                     <div style="max-height: 250px; overflow-y: auto; background: #f9fafb; padding: 10px; border-radius: 6px;">
         `;
         
