@@ -191,10 +191,8 @@ class RFIDReader {
         document.getElementById('btnConnect').addEventListener('click', () => this.handleConnect());
         document.getElementById('btnSearch').addEventListener('click', () => this.showDeviceModal());
 
-        // Inventory buttons
-        document.getElementById('btnInventorySingle').addEventListener('click', () => this.inventorySingle());
-        document.getElementById('btnInventoryLoop').addEventListener('click', () => this.inventoryLoop());
-        document.getElementById('btnStop').addEventListener('click', () => this.stopInventory());
+        // Inventory buttons - removed Single Read and Loop Read as device handles this
+        // Device buttons automatically trigger scanning and send data via notifications
         document.getElementById('btnClear').addEventListener('click', () => this.clearData());
 
         // Filter
@@ -1885,15 +1883,17 @@ class RFIDReader {
         const scanning = this.isScanning;
 
         // Enable/disable buttons based on connection status
-        const actionButtons = ['btnInventorySingle', 'btnInventoryLoop', 'btnRead', 'btnWrite', 
+        // Note: Single Read and Loop Read buttons removed - device handles scanning via physical buttons
+        const actionButtons = ['btnRead', 'btnWrite', 
                               'btnLock', 'btnKill', 'btnErase', 'btnScanBarcode'];
         actionButtons.forEach(id => {
             const btn = document.getElementById(id);
-            if (btn) btn.disabled = !connected || scanning;
+            if (btn) btn.disabled = !connected;
         });
 
-        document.getElementById('btnStop').disabled = !scanning;
-        document.getElementById('btnClear').disabled = scanning;
+        // Clear button always enabled
+        const btnClear = document.getElementById('btnClear');
+        if (btnClear) btnClear.disabled = false;
     }
 
     // Tag Inventory Functions
