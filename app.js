@@ -32,6 +32,8 @@ class RFIDReader {
         // Store pending device/service for reconnection
         this.pendingDevice = null;
         this.pendingService = null;
+        this.lastDevice = null;
+        this.lastError = null;
         
         // Device presets for known RFID readers
         this.devicePresets = {
@@ -676,8 +678,184 @@ class RFIDReader {
             });
         } catch (error) {
             console.error('Connection error:', error);
-            this.updateConnectionStatus('disconnected', 'Connection failed');
-            this.showToast('Connection failed: ' + error.message);
+            this.lastDevice = device;
+            this.lastError = error;
+            
+            // Check if this is a GATT-related error
+            const isGATTError = error.name && (
+                error.name.includes('GATT') || 
+                error.name === 'NetworkError' ||
+                error.name === 'InvalidStateError' ||
+                error.name === 'OperationError' ||
+                error.message && error.message.includes('GATT')
+            );
+            
+            if (isGATTError) {
+                // Show GATT error recovery UI
+                await this.showGATTErrorRecovery(device, error);
+            } else {
+                this.updateConnectionStatus('disconnected', 'Connection failed');
+                const errorMsg = this.handleGATTError(error, device);
+                this.showToast(errorMsg);
+            }
+        }
+    }
+    
+    // Handle GATT-specific errors with helpful messages
+    handleGATTError(error, device) {
+        const errorName = error.name || '';
+        const errorMessage = error.message || '';
+        
+        if (errorName === 'NetworkError' || errorMessage.includes('network')) {
+            return 'GATT Error: Network/Connection failed. Try moving closer to the device or reconnecting.';
+        } else if (errorName === 'InvalidStateError' || errorMessage.includes('invalid state')) {
+            return 'GATT Error: Device is not in a valid state. Try disconnecting and reconnecting.';
+        } else if (errorName === 'SecurityError' || errorMessage.includes('security')) {
+            return 'GATT Error: Security/Authorization failed. Check Bluetooth permissions.';
+        } else if (errorName === 'NotFoundError') {
+            return 'GATT Error: Service or characteristic not found.';
+        } else if (errorName === 'NotSupportedError') {
+            return 'GATT Error: Operation not supported by this device.';
+        } else if (errorName === 'OperationError' || errorMessage.includes('operation')) {
+            return 'GATT Error: Operation failed. The device may have disconnected.';
+        } else if (errorMessage.includes('GATT') || errorName.includes('GATT')) {
+            return `GATT Error: ${errorMessage}. Try reconnecting or moving closer to the device.`;
+        } else if (errorMessage.includes('timeout') || errorMessage.includes('Time')) {
+            return 'GATT Error: Connection timeout. The device may be out of range or not responding.';
+        } else {
+            return `Connection failed: ${errorMessage}`;
+        }
+    }
+    
+    // Show recovery options for GATT errors
+    async showGATTErrorRecovery(device, error) {
+        const deviceList = document.getElementById('deviceList');
+        document.getElementById('deviceModal').style.display = 'block';
+        
+        let html = `
+            <div style="padding: 20px;">
+                <div style="background: #fee2e2; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 2px solid #ef4444;">
+                    <div style="font-weight: 600; color: #991b1b; margin-bottom: 8px; font-size: 16px;">
+                        ⚠️ GATT Connection Error
+                    </div>
+                    <div style="font-size: 13px; color: #7f1d1d; line-height: 1.6;">
+                        <strong>Error:</strong> ${error.name || 'Unknown'}<br>
+                        <strong>Message:</strong> ${error.message || 'Connection failed'}
+                    </div>
+                </div>
+                
+                <div style="background: #f0f9ff; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 2px solid #0ea5e9;">
+                    <div style="font-weight: 600; color: #0369a1; margin-bottom: 10px;">
+                        🔧 Try These Solutions:
+                    </div>
+                    <div style="font-size: 13px; color: #0c4a6e; line-height: 1.8;">
+                        <strong>1. Retry Connection:</strong><br>
+                        <button onclick="window.rfidReader.retryConnection()" 
+                                class="btn btn-primary" 
+                                style="width: 100%; padding: 12px; margin-top: 8px; margin-bottom: 15px;">
+                            🔄 Retry Connection
+                        </button>
+                        
+                        <strong>2. Try Auto-Discover:</strong><br>
+                        <button onclick="window.rfidReader.connectWithAutoDiscover(window.rfidReader.pendingDevice || window.rfidReader.lastDevice)" 
+                                class="btn btn-secondary" 
+                                style="width: 100%; padding: 12px; margin-top: 8px; margin-bottom: 15px;">
+                            🔍 Try Auto-Discover
+                        </button>
+                        
+                        <strong>3. Quick Connect (Common UUIDs):</strong><br>
+                        <button onclick="window.rfidReader.tryQuickConnectAfterError()" 
+                                class="btn btn-secondary" 
+                                style="width: 100%; padding: 12px; margin-top: 8px; margin-bottom: 15px;">
+                            ⚡ Quick Connect
+                        </button>
+                    </div>
+                </div>
+                
+                <div style="background: #fef3c7; padding: 15px; border-radius: 6px; margin-bottom: 15px; font-size: 12px; color: #78350f;">
+                    <strong style="display: block; margin-bottom: 8px;">💡 Quick Fixes:</strong>
+                    <div style="line-height: 1.8;">
+                        • <strong>Move closer</strong> - Stay within 1-2 meters (3-6 feet)<br>
+                        • <strong>Check power</strong> - Make sure RFID reader is on<br>
+                        • <strong>Restart Bluetooth</strong> - Turn off/on Bluetooth<br>
+                        • <strong>Restart reader</strong> - Turn off/on your R6 PRO<br>
+                        • <strong>Close other apps</strong> - Don't use multiple Bluetooth apps<br>
+                        • <strong>Check battery</strong> - Low battery causes connection issues
+                    </div>
+                </div>
+                
+                <div style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-size: 11px; color: #6b7280;">
+                    <strong>Error Details:</strong><br>
+                    Type: ${error.name || 'Unknown'}<br>
+                    Message: ${error.message || 'No details'}
+                </div>
+                
+                <button onclick="window.rfidReader.showDeviceModal()" 
+                        class="btn btn-secondary" style="width: 100%; padding: 12px;">
+                    Cancel
+                </button>
+            </div>
+        `;
+        
+        this.lastDevice = device;
+        this.lastError = error;
+        deviceList.innerHTML = html;
+    }
+    
+    // Retry connection after GATT error
+    async retryConnection() {
+        if (!this.lastDevice) {
+            this.showToast('No device to retry. Please scan for devices again.');
+            return;
+        }
+        
+        this.hideDeviceModal();
+        this.updateConnectionStatus('connecting', 'Retrying connection...');
+        this.showToast('Retrying connection... Please wait');
+        
+        // Wait a moment before retrying
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        try {
+            // Try to disconnect first if still connected
+            if (this.lastDevice.gatt && this.lastDevice.gatt.connected) {
+                try {
+                    await this.lastDevice.gatt.disconnect();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (e) {
+                    console.log('Could not disconnect, continuing...');
+                }
+            }
+            
+            // Try connecting again with auto-discover
+            await this.connectWithAutoDiscover(this.lastDevice);
+        } catch (error) {
+            console.error('Retry failed:', error);
+            await this.showGATTErrorRecovery(this.lastDevice, error);
+        }
+    }
+    
+    // Try quick connect after error
+    async tryQuickConnectAfterError() {
+        if (!this.lastDevice) {
+            this.showToast('No device available. Please scan for devices again.');
+            return;
+        }
+        
+        try {
+            const server = await this.lastDevice.gatt.connect();
+            await this.quickConnectR6Pro(this.lastDevice, server);
+        } catch (error) {
+            console.error('Quick connect retry error:', error);
+            this.showToast('Quick Connect failed. Please try manual selection.');
+            // Show service selection as fallback
+            try {
+                const server = await this.lastDevice.gatt.connect();
+                const services = await server.getPrimaryServices();
+                await this.showServiceSelectionUI(this.lastDevice, server, services, 'Quick Connect failed. Please select manually.');
+            } catch (e) {
+                this.showGATTErrorRecovery(this.lastDevice, error);
+            }
         }
     }
     
@@ -786,15 +964,31 @@ class RFIDReader {
             
         } catch (error) {
             console.error('Auto-discover error:', error);
-            this.updateConnectionStatus('disconnected', 'Auto-discover failed');
+            this.lastDevice = device;
+            this.lastError = error;
             
-            // Try to show manual selection UI
-            try {
-                const server = await device.gatt.connect();
-                const services = await server.getPrimaryServices();
-                await this.showServiceSelectionUI(device, server, services, 'Auto-discover failed. Please select manually.');
-            } catch (e) {
-                this.showToast('Connection failed: ' + error.message);
+            // Check if this is a GATT error
+            const isGATTError = error.name && (
+                error.name.includes('GATT') || 
+                error.name === 'NetworkError' ||
+                error.name === 'InvalidStateError' ||
+                error.message && error.message.includes('GATT')
+            );
+            
+            if (isGATTError) {
+                // Show GATT error recovery UI
+                await this.showGATTErrorRecovery(device, error);
+            } else {
+                this.updateConnectionStatus('disconnected', 'Auto-discover failed');
+                
+                // Try to show manual selection UI
+                try {
+                    const server = await device.gatt.connect();
+                    const services = await server.getPrimaryServices();
+                    await this.showServiceSelectionUI(device, server, services, 'Auto-discover failed. Please select manually.');
+                } catch (e) {
+                    this.showToast('Connection failed: ' + error.message);
+                }
             }
         }
     }
