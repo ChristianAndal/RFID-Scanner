@@ -32,8 +32,6 @@ class RFIDReader {
         // Store pending device/service for reconnection
         this.pendingDevice = null;
         this.pendingService = null;
-        this.availableServices = [];
-        this.availableCharacteristics = [];
         
         // RFID Command Protocol
         // NOTE: These are GENERIC commands based on common UHF RFID protocols
@@ -398,10 +396,10 @@ class RFIDReader {
                 }
 
                 // Show the browser's device picker
-                // Accept all devices - we'll discover services after connection
                 const device = await navigator.bluetooth.requestDevice({
+                    // Accept all devices to show everything nearby
                     acceptAllDevices: true,
-                    optionalServices: [this.SERVICE_UUID, 'battery_service', 'device_information']
+                    optionalServices: [this.SERVICE_UUID]
                 });
 
                 // User selected a device, connect to it
@@ -543,53 +541,46 @@ class RFIDReader {
             console.log('Connecting to GATT server...');
             const server = await device.gatt.connect();
             
-            // Try to get the primary service
+            // Try to get the expected service
             let service = null;
-            let serviceUUID = this.SERVICE_UUID;
-            let characteristicUUID = this.CHARACTERISTIC_UUID;
-            
             try {
-                console.log('Getting primary service:', serviceUUID);
-                service = await server.getPrimaryService(serviceUUID);
+                console.log('Getting primary service:', this.SERVICE_UUID);
+                service = await server.getPrimaryService(this.SERVICE_UUID);
+                this.server = service;
             } catch (serviceError) {
-                console.warn('Expected service not found, discovering available services...');
-                
-                // Discover available services
+                console.warn('Expected service not found, discovering all services...');
+                // Discover all available services
                 const services = await server.getPrimaryServices();
-                console.log('Available services:', services.map(s => s.uuid));
+                console.log('Available services:', services.map(s => ({ uuid: s.uuid })));
                 
-                // Show available services and allow user to select
-                await this.showServiceSelectionUI(device, services, serviceError.message);
-                return; // User will reconnect with selected service
+                // Show service selection UI
+                await this.showServiceSelectionUI(device, server, services, serviceError.message);
+                return;
             }
             
-            // Try to get the characteristic
-            let characteristic = null;
+            // Try to get the expected characteristic
             try {
-                console.log('Getting characteristic:', characteristicUUID);
-                characteristic = await service.getCharacteristic(characteristicUUID);
+                console.log('Getting characteristic:', this.CHARACTERISTIC_UUID);
+                this.characteristic = await service.getCharacteristic(this.CHARACTERISTIC_UUID);
             } catch (charError) {
-                console.warn('Expected characteristic not found, discovering available characteristics...');
-                
-                // Discover available characteristics
+                console.warn('Expected characteristic not found, discovering all characteristics...');
+                // Discover all available characteristics
                 const characteristics = await service.getCharacteristics();
-                console.log('Available characteristics:', characteristics.map(c => c.uuid));
+                console.log('Available characteristics:', characteristics.map(c => ({ uuid: c.uuid, properties: c.properties })));
                 
-                // Show available characteristics and allow user to select
+                // Show characteristic selection UI
                 await this.showCharacteristicSelectionUI(device, service, characteristics, charError.message);
-                return; // User will reconnect with selected characteristic
+                return;
             }
             
             // Enable notifications for receiving data
             console.log('Starting notifications...');
-            await characteristic.startNotifications();
-            characteristic.addEventListener('characteristicvaluechanged', (event) => {
+            await this.characteristic.startNotifications();
+            this.characteristic.addEventListener('characteristicvaluechanged', (event) => {
                 this.handleNotification(event);
             });
             
             this.device = device;
-            this.server = service;
-            this.characteristic = characteristic;
             this.isConnected = true;
             this.updateConnectionStatus('connected', `${device.name || 'Device'} (${device.id})`);
             this.updateUI();
@@ -602,54 +593,41 @@ class RFIDReader {
         } catch (error) {
             console.error('Connection error:', error);
             this.updateConnectionStatus('disconnected', 'Connection failed');
-            
-            // Provide more helpful error messages
-            let errorMsg = error.message || 'Unknown error';
-            let showDetails = true;
-            
-            if (errorMsg.includes('No Services matching UUID')) {
-                // Service discovery is already handled in the try block above
-                errorMsg = 'Service UUID not found. Please select from available services.';
-                showDetails = false;
-            } else if (errorMsg.includes('No Characteristics matching UUID')) {
-                // Characteristic discovery is already handled in the try block above
-                errorMsg = 'Characteristic UUID not found. Please select from available characteristics.';
-                showDetails = false;
-            }
-            
-            if (showDetails) {
-                this.showToast('Connection failed: ' + errorMsg);
-                this.showConnectionErrorDetails(device, error);
-            }
+            this.showToast('Connection failed: ' + error.message);
         }
     }
     
     // Show UI for selecting service when expected one not found
-    async showServiceSelectionUI(device, availableServices, errorMessage) {
+    async showServiceSelectionUI(device, server, availableServices, errorMessage) {
         const deviceList = document.getElementById('deviceList');
+        document.getElementById('deviceModal').style.display = 'block';
         
         let html = `
             <div style="padding: 20px;">
-                <div style="color: #ef4444; font-weight: 600; margin-bottom: 15px;">
+                <div style="color: #ef4444; font-weight: 600; margin-bottom: 15px; font-size: 16px;">
                     ⚠️ Service UUID Not Found
                 </div>
-                <div style="background: #fef3c7; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-size: 13px;">
-                    <strong>Expected Service:</strong> ${this.SERVICE_UUID}<br>
+                <div style="background: #fef3c7; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; line-height: 1.6;">
+                    <strong>Expected Service:</strong><br>
+                    <code style="word-break: break-all; font-size: 11px;">${this.SERVICE_UUID}</code><br><br>
                     <strong>Error:</strong> ${errorMessage}
                 </div>
                 <div style="margin-bottom: 15px;">
-                    <strong>Available Services on this device:</strong>
-                    <div style="max-height: 200px; overflow-y: auto; margin-top: 10px; background: #f9fafb; padding: 10px; border-radius: 6px;">
+                    <strong style="display: block; margin-bottom: 10px;">Available Services on this device:</strong>
+                    <div style="max-height: 250px; overflow-y: auto; background: #f9fafb; padding: 10px; border-radius: 6px;">
         `;
         
         if (availableServices.length === 0) {
-            html += `<div style="color: #6b7280; font-style: italic;">No services found on this device.</div>`;
+            html += `<div style="color: #6b7280; font-style: italic; padding: 10px;">No services found on this device.</div>`;
         } else {
             availableServices.forEach((service, index) => {
                 html += `
-                    <div style="padding: 8px; margin-bottom: 5px; background: white; border-radius: 4px; cursor: pointer; border: 1px solid #e5e7eb;"
+                    <div style="padding: 10px; margin-bottom: 8px; background: white; border-radius: 4px; cursor: pointer; border: 2px solid #e5e7eb; transition: all 0.2s;"
+                         onmouseover="this.style.borderColor='#667eea'; this.style.backgroundColor='#f0f4ff';"
+                         onmouseout="this.style.borderColor='#e5e7eb'; this.style.backgroundColor='white';"
                          onclick="window.rfidReader.selectService('${device.id}', '${service.uuid}')">
-                        <strong>Service ${index + 1}:</strong> ${service.uuid}
+                        <div style="font-weight: 600; margin-bottom: 4px;">Service ${index + 1}</div>
+                        <code style="word-break: break-all; font-size: 11px; color: #374151;">${service.uuid}</code>
                     </div>
                 `;
             });
@@ -663,66 +641,73 @@ class RFIDReader {
                     <input type="text" id="customServiceUUID" 
                            value="${this.SERVICE_UUID}"
                            placeholder="0000fff0-0000-1000-8000-00805f9b34fb"
-                           style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 13px;">
+                           style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 12px;">
                 </div>
                 <div style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; font-weight: 600;">Characteristic UUID:</label>
                     <input type="text" id="customCharUUID" 
                            value="${this.CHARACTERISTIC_UUID}"
                            placeholder="0000fff1-0000-1000-8000-00805f9b34fb"
-                           style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 13px;">
+                           style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 12px;">
                 </div>
                 <button onclick="window.rfidReader.connectWithCustomUUIDs()" 
-                        class="btn btn-primary" style="width: 100%;">
+                        class="btn btn-primary" style="width: 100%; padding: 12px;">
                     Connect with Custom UUIDs
                 </button>
-                <button onclick="window.rfidReader.resetToDefaultUUIDs()" 
-                        class="btn btn-secondary" style="width: 100%; margin-top: 10px;">
-                    Reset to Default UUIDs
-                </button>
                 <button onclick="window.rfidReader.showDeviceModal()" 
-                        class="btn btn-secondary" style="width: 100%; margin-top: 10px;">
+                        class="btn btn-secondary" style="width: 100%; margin-top: 10px; padding: 12px;">
                     Cancel
                 </button>
             </div>
         `;
         
-        // Store device reference for reconnection
         this.pendingDevice = device;
-        this.availableServices = availableServices;
-        
-        // Show in modal
-        document.getElementById('deviceModal').style.display = 'block';
+        this.pendingServer = server;
         deviceList.innerHTML = html;
     }
     
     // Show UI for selecting characteristic when expected one not found
     async showCharacteristicSelectionUI(device, service, availableCharacteristics, errorMessage) {
         const deviceList = document.getElementById('deviceList');
+        document.getElementById('deviceModal').style.display = 'block';
         
         let html = `
             <div style="padding: 20px;">
-                <div style="color: #ef4444; font-weight: 600; margin-bottom: 15px;">
+                <div style="color: #ef4444; font-weight: 600; margin-bottom: 15px; font-size: 16px;">
                     ⚠️ Characteristic UUID Not Found
                 </div>
-                <div style="background: #fef3c7; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-size: 13px;">
-                    <strong>Service:</strong> ${service.uuid}<br>
-                    <strong>Expected Characteristic:</strong> ${this.CHARACTERISTIC_UUID}<br>
+                <div style="background: #fef3c7; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; line-height: 1.6;">
+                    <strong>Service:</strong><br>
+                    <code style="word-break: break-all; font-size: 11px;">${service.uuid}</code><br><br>
+                    <strong>Expected Characteristic:</strong><br>
+                    <code style="word-break: break-all; font-size: 11px;">${this.CHARACTERISTIC_UUID}</code><br><br>
                     <strong>Error:</strong> ${errorMessage}
                 </div>
                 <div style="margin-bottom: 15px;">
-                    <strong>Available Characteristics:</strong>
-                    <div style="max-height: 200px; overflow-y: auto; margin-top: 10px; background: #f9fafb; padding: 10px; border-radius: 6px;">
+                    <strong style="display: block; margin-bottom: 10px;">Available Characteristics:</strong>
+                    <div style="max-height: 300px; overflow-y: auto; background: #f9fafb; padding: 10px; border-radius: 6px;">
         `;
         
         if (availableCharacteristics.length === 0) {
-            html += `<div style="color: #6b7280; font-style: italic;">No characteristics found on this service.</div>`;
+            html += `<div style="color: #6b7280; font-style: italic; padding: 10px;">No characteristics found on this service.</div>`;
         } else {
             availableCharacteristics.forEach((char, index) => {
+                const props = [];
+                if (char.properties.read) props.push('Read');
+                if (char.properties.write) props.push('Write');
+                if (char.properties.notify) props.push('Notify');
+                if (char.properties.indicate) props.push('Indicate');
+                
                 html += `
-                    <div style="padding: 8px; margin-bottom: 5px; background: white; border-radius: 4px; cursor: pointer; border: 1px solid #e5e7eb;"
+                    <div style="padding: 12px; margin-bottom: 8px; background: white; border-radius: 4px; cursor: pointer; border: 2px solid #e5e7eb; transition: all 0.2s;"
+                         onmouseover="this.style.borderColor='#667eea'; this.style.backgroundColor='#f0f4ff';"
+                         onmouseout="this.style.borderColor='#e5e7eb'; this.style.backgroundColor='white';"
                          onclick="window.rfidReader.selectCharacteristic('${char.uuid}')">
-                        <strong>Characteristic ${index + 1}:</strong> ${char.uuid}
+                        <div style="font-weight: 600; margin-bottom: 4px;">Characteristic ${index + 1}</div>
+                        <code style="word-break: break-all; font-size: 11px; color: #374151; display: block; margin-bottom: 4px;">${char.uuid}</code>
+                        <div style="font-size: 10px; color: #6b7280;">
+                            Properties: ${props.join(', ') || 'None'}
+                        </div>
                     </div>
                 `;
             });
@@ -736,48 +721,44 @@ class RFIDReader {
                     <input type="text" id="customCharUUID2" 
                            value="${this.CHARACTERISTIC_UUID}"
                            placeholder="0000fff1-0000-1000-8000-00805f9b34fb"
-                           style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 13px;">
+                           style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 12px;">
                 </div>
                 <button onclick="window.rfidReader.connectWithSelectedService()" 
-                        class="btn btn-primary" style="width: 100%;">
+                        class="btn btn-primary" style="width: 100%; padding: 12px;">
                     Connect with Selected Characteristic
                 </button>
                 <button onclick="window.rfidReader.showDeviceModal()" 
-                        class="btn btn-secondary" style="width: 100%; margin-top: 10px;">
+                        class="btn btn-secondary" style="width: 100%; margin-top: 10px; padding: 12px;">
                     Cancel
                 </button>
             </div>
         `;
         
-        // Store service reference for reconnection
+        this.pendingDevice = device;
         this.pendingService = service;
-        this.availableCharacteristics = availableCharacteristics;
-        
-        // Show in modal
-        document.getElementById('deviceModal').style.display = 'block';
         deviceList.innerHTML = html;
     }
     
-    // Select a service from available services
+    // Select a service and reconnect
     async selectService(deviceId, serviceUUID) {
         this.SERVICE_UUID = serviceUUID;
+        localStorage.setItem('customServiceUUID', serviceUUID);
         console.log('Selected service UUID:', serviceUUID);
-        // Reconnect with selected service
-        const device = this.pendingDevice;
-        if (device && device.id === deviceId) {
-            this.connectToDevice(device);
+        
+        if (this.pendingDevice && this.pendingDevice.id === deviceId) {
+            this.connectToDevice(this.pendingDevice);
         }
     }
     
-    // Select a characteristic from available characteristics
+    // Select a characteristic and complete connection
     async selectCharacteristic(characteristicUUID) {
         this.CHARACTERISTIC_UUID = characteristicUUID;
+        localStorage.setItem('customCharUUID', characteristicUUID);
         console.log('Selected characteristic UUID:', characteristicUUID);
-        // Continue connection with selected characteristic
         this.connectWithSelectedService();
     }
     
-    // Connect with custom UUIDs entered by user
+    // Connect with custom UUIDs
     async connectWithCustomUUIDs() {
         const serviceUUID = document.getElementById('customServiceUUID').value.trim();
         const charUUID = document.getElementById('customCharUUID').value.trim();
@@ -787,32 +768,21 @@ class RFIDReader {
             return;
         }
         
-        // Validate UUID format (basic check)
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!uuidRegex.test(serviceUUID) && !/^[0-9a-f]{4}$/i.test(serviceUUID)) {
-            this.showToast('Invalid Service UUID format');
-            return;
-        }
-        
         this.SERVICE_UUID = serviceUUID;
         this.CHARACTERISTIC_UUID = charUUID;
-        
-        // Save to localStorage
         localStorage.setItem('customServiceUUID', serviceUUID);
         localStorage.setItem('customCharUUID', charUUID);
         
-        // Reconnect with custom UUIDs
         if (this.pendingDevice) {
             this.connectToDevice(this.pendingDevice);
         }
     }
     
-    // Continue connection with selected service
+    // Complete connection with selected service
     async connectWithSelectedService() {
-        if (!this.pendingService) return;
+        if (!this.pendingService || !this.pendingDevice) return;
         
         const charUUID = document.getElementById('customCharUUID2')?.value.trim() || this.CHARACTERISTIC_UUID;
-        this.CHARACTERISTIC_UUID = charUUID;
         
         try {
             const characteristic = await this.pendingService.getCharacteristic(charUUID);
@@ -823,52 +793,23 @@ class RFIDReader {
                 this.handleNotification(event);
             });
             
+            this.device = this.pendingDevice;
             this.server = this.pendingService;
             this.characteristic = characteristic;
             this.isConnected = true;
-            this.updateConnectionStatus('connected', `${this.pendingDevice?.name || 'Device'}`);
+            
+            this.updateConnectionStatus('connected', `${this.pendingDevice.name || 'Device'}`);
             this.updateUI();
             this.showToast('Connected successfully');
             this.hideDeviceModal();
             
-            if (this.pendingDevice) {
-                this.device = this.pendingDevice;
-                this.pendingDevice.addEventListener('gattserverdisconnected', () => {
-                    this.handleDisconnection();
-                });
-            }
+            this.pendingDevice.addEventListener('gattserverdisconnected', () => {
+                this.handleDisconnection();
+            });
         } catch (error) {
             console.error('Characteristic connection error:', error);
-            this.showToast('Failed to connect to characteristic: ' + error.message);
+            this.showToast('Failed to connect: ' + error.message);
         }
-    }
-    
-    // Reset to default UUIDs
-    resetToDefaultUUIDs() {
-        this.SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
-        this.CHARACTERISTIC_UUID = '0000fff1-0000-1000-8000-00805f9b34fb';
-        
-        // Remove from localStorage
-        localStorage.removeItem('customServiceUUID');
-        localStorage.removeItem('customCharUUID');
-        
-        // Update input fields if they exist
-        const serviceInput = document.getElementById('customServiceUUID');
-        const charInput = document.getElementById('customCharUUID');
-        if (serviceInput) serviceInput.value = this.SERVICE_UUID;
-        if (charInput) charInput.value = this.CHARACTERISTIC_UUID;
-        
-        this.showToast('Reset to default UUIDs');
-    }
-    
-    // Show detailed error information
-    showConnectionErrorDetails(device, error) {
-        console.log('Connection error details:', {
-            device: device.name,
-            deviceId: device.id,
-            error: error.message,
-            errorName: error.name
-        });
     }
 
     // Handle incoming data from the RFID reader
