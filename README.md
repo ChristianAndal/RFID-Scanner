@@ -33,8 +33,16 @@ A web-based RFID UHF reader application converted from Android to HTML/JavaScrip
 
 ## Browser Compatibility
 
-- **Web Bluetooth API**: Chrome 56+, Edge 79+, Opera 43+
-- **Simulation Mode**: Works in all modern browsers (Firefox, Safari, etc.)
+- **Web Bluetooth API**: Chrome 56+, Edge 79+, Opera 43+ (Desktop & Android)
+- **WebSocket Bridge**: Works in ALL browsers including iOS Safari! 🌐
+- **Mobile Support**: ✅ iOS and Android supported via WebSocket Bridge
+
+### Mobile Platforms
+
+- **Android**: Use Chrome/Edge/Opera with Web Bluetooth (Direct) or any browser with WebSocket Bridge
+- **iOS**: Use WebSocket Bridge (works in Safari) or Chrome/Edge with Web Bluetooth
+
+📱 See [MOBILE_SETUP_GUIDE.md](MOBILE_SETUP_GUIDE.md) for detailed mobile setup instructions.
 
 ## Connection Modes
 

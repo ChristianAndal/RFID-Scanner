@@ -21,8 +21,12 @@ class RFIDReader {
         this.scanInterval = null;
         this.simulationMode = false; // Real hardware mode - set to true only for testing without hardware
         
-        // Connection type: 'webluetooth' or 'auto'
+        // Connection type: 'webluetooth', 'websocket', or 'auto'
         this.connectionType = 'auto';
+        
+        // WebSocket bridge connection
+        this.wsSocket = null;
+        this.bridgeUrl = null;
         
         // Bluetooth service UUIDs (from Android app)
         this.SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
@@ -197,9 +201,28 @@ class RFIDReader {
     // Get available connection methods
     getAvailableConnectionMethods() {
         const methods = [];
+        const compat = this.getBrowserCompatibilityInfo();
+        
+        // Web Bluetooth (works on Android Chrome/Edge/Opera, not iOS)
         if (this.isWebBluetoothAvailable()) {
-            methods.push({ type: 'webluetooth', name: 'Web Bluetooth (Direct)', browsers: 'Chrome, Edge, Opera (Desktop/Android)' });
+            methods.push({ 
+                type: 'webluetooth', 
+                name: 'Web Bluetooth (Direct)', 
+                browsers: 'Chrome, Edge, Opera (Desktop/Android)',
+                description: 'Direct Bluetooth connection - fastest method',
+                icon: '📱'
+            });
         }
+        
+        // WebSocket Bridge (works everywhere including iOS Safari)
+        methods.push({ 
+            type: 'websocket', 
+            name: 'WebSocket Bridge', 
+            browsers: 'All browsers (iOS, Android, Desktop)',
+            description: 'Connect via local bridge server - works on iOS Safari',
+            icon: '🌐'
+        });
+        
         return methods;
     }
     
@@ -378,6 +401,12 @@ class RFIDReader {
         const methods = this.getAvailableConnectionMethods();
         const compat = this.getBrowserCompatibilityInfo();
         
+        // If WebSocket bridge is selected, show bridge connection UI
+        if (this.connectionType === 'websocket') {
+            this.showWebSocketBridgeUI();
+            return;
+        }
+        
         if (methods.length === 0) {
             let errorMsg = '';
             let instructions = '';
@@ -387,21 +416,26 @@ class RFIDReader {
                 errorMsg = 'Web Bluetooth Not Available in In-App Browser';
                 instructions = `
                     <strong>Problem:</strong> You're using an in-app browser (like Messenger, Instagram, Facebook, etc.) which doesn't support Web Bluetooth.<br><br>
-                    <strong>Solution:</strong><br>
-                    1. Open this page in a regular browser (Chrome, Edge, or Opera)<br>
-                    2. On mobile: Copy the URL and paste it into Chrome or Edge<br>
+                    <strong>✅ Best Solution - Use WebSocket Bridge:</strong><br>
+                    Select <strong>"WebSocket Bridge"</strong> connection method above. It works in in-app browsers!<br><br>
+                    <strong>Alternative - Switch Browser:</strong><br>
+                    1. Copy the URL and open it in Chrome, Edge, or Opera<br>
+                    2. On mobile: Paste URL into Chrome or Edge app<br>
                     3. On desktop: Use Chrome, Edge, or Opera browser<br><br>
-                    <strong>Note:</strong> iOS Safari doesn't support Web Bluetooth. Use Chrome or Edge on iOS.
+                    <strong>💡 Tip:</strong> WebSocket Bridge works in ANY browser, including in-app browsers!
                 `;
             } else if (compat.isIOS) {
                 errorMsg = 'Web Bluetooth Not Available on iOS Safari';
                 instructions = `
                     <strong>Problem:</strong> iOS Safari doesn't support Web Bluetooth API.<br><br>
-                    <strong>Solution:</strong><br>
-                    1. Download and use <strong>Chrome</strong> or <strong>Edge</strong> browser on iOS<br>
-                    2. Open this page in Chrome/Edge on iOS<br>
-                    3. Web Bluetooth works in Chrome/Edge on iOS (but not Safari)<br><br>
-                    <strong>Alternative:</strong> Use a desktop computer with Chrome, Edge, or Opera.
+                    <strong>✅ Best Solution - Use WebSocket Bridge:</strong><br>
+                    1. Select <strong>"WebSocket Bridge"</strong> connection method above<br>
+                    2. Set up a bridge server on your computer<br>
+                    3. Connect via WebSocket - works in Safari!<br><br>
+                    <strong>Alternative Options:</strong><br>
+                    • Use <strong>Chrome</strong> or <strong>Edge</strong> on iOS (Web Bluetooth works there)<br>
+                    • Use a desktop computer with Chrome, Edge, or Opera<br><br>
+                    <strong>💡 Tip:</strong> The WebSocket Bridge method works in ALL browsers including iOS Safari!
                 `;
             } else if (!compat.isSecure) {
                 errorMsg = 'HTTPS Required for Web Bluetooth';
@@ -418,12 +452,11 @@ class RFIDReader {
                     <strong>Problem:</strong> This browser doesn't support Web Bluetooth API.<br><br>
                     <strong>Current browser:</strong> ${compat.browser}<br>
                     <strong>Protocol:</strong> ${compat.protocol}<br><br>
-                    <strong>Solution:</strong><br>
-                    1. Use <strong>Chrome</strong>, <strong>Edge</strong>, or <strong>Opera</strong> browser<br>
-                    2. Web Bluetooth is NOT supported in:<br>
-                       • Firefox<br>
-                       • Safari (desktop or mobile)<br>
-                       • In-app browsers (Messenger, Instagram, etc.)<br><br>
+                    <strong>✅ Best Solution - Use WebSocket Bridge:</strong><br>
+                    Select <strong>"WebSocket Bridge"</strong> connection method above. It works in ALL browsers!<br><br>
+                    <strong>Alternative - Switch Browser:</strong><br>
+                    Web Bluetooth works in: <strong>Chrome</strong>, <strong>Edge</strong>, or <strong>Opera</strong><br>
+                    NOT supported in: Firefox, Safari, in-app browsers<br><br>
                     <strong>Download:</strong><br>
                     • <a href="https://www.google.com/chrome/" target="_blank" style="color: #667eea;">Chrome</a><br>
                     • <a href="https://www.microsoft.com/edge" target="_blank" style="color: #667eea;">Edge</a>
@@ -465,14 +498,23 @@ class RFIDReader {
         
         methods.forEach(method => {
             const isActive = this.connectionType === method.type;
+            const icon = method.icon || '📱';
             html += `
                 <div style="padding: 12px; margin-bottom: 10px; border: 2px solid ${isActive ? '#667eea' : '#e5e7eb'}; border-radius: 6px; cursor: pointer; background: ${isActive ? '#f0f4ff' : 'white'};" 
                      onclick="window.rfidReader.connectionType='${method.type}'; window.rfidReader.showDeviceModal();">
-                    <div style="font-weight: 600; color: ${isActive ? '#667eea' : '#374151'};">
-                        ${isActive ? '✓ ' : ''}${method.name}
-                    </div>
-                    <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
-                        Works in: ${method.browsers}
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 20px;">${icon}</span>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; color: ${isActive ? '#667eea' : '#374151'};">
+                                ${isActive ? '✓ ' : ''}${method.name}
+                            </div>
+                            <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
+                                ${method.description || ''}
+                            </div>
+                            <div style="font-size: 10px; color: #9ca3af; margin-top: 2px;">
+                                Works in: ${method.browsers}
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -756,8 +798,18 @@ class RFIDReader {
 
     // Handle incoming data from the RFID reader
     handleNotification(event) {
-        const value = event.target.value;
-        const buffer = new Uint8Array(value.buffer);
+        let buffer;
+        if (event && event.target && event.target.value) {
+            const value = event.target.value;
+            buffer = new Uint8Array(value.buffer || value);
+        } else if (event instanceof Uint8Array) {
+            buffer = event;
+        } else if (event && event.buffer) {
+            buffer = new Uint8Array(event.buffer);
+        } else {
+            console.error('Unknown notification format:', event);
+            return;
+        }
         
         // Log raw data for debugging
         const hexStr = this.bytesToHex(buffer);
@@ -939,21 +991,217 @@ class RFIDReader {
 
     // Send command to RFID reader
     async sendCommand(commandBytes) {
-        // Send via Web Bluetooth
-        if (!this.characteristic) {
+        if (this.connectionType === 'websocket' && this.wsSocket) {
+            // Send via WebSocket bridge
+            try {
+                if (this.wsSocket.readyState === WebSocket.OPEN) {
+                    // Send as binary
+                    this.wsSocket.send(commandBytes);
+                    console.log('Command sent via WebSocket:', commandBytes);
+                } else {
+                    throw new Error('WebSocket connection not open');
+                }
+            } catch (error) {
+                console.error('Error sending command via WebSocket:', error);
+                throw error;
+            }
+        } else if (this.characteristic) {
+            // Send via Web Bluetooth
+            try {
+                await this.characteristic.writeValue(commandBytes);
+                console.log('Command sent via Web Bluetooth:', commandBytes);
+            } catch (error) {
+                console.error('Error sending command:', error);
+                throw error;
+            }
+        } else {
             throw new Error('Not connected to device');
-        }
-        
-        try {
-            await this.characteristic.writeValue(commandBytes);
-            console.log('Command sent:', commandBytes);
-        } catch (error) {
-            console.error('Error sending command:', error);
-            throw error;
         }
     }
 
+    // Show WebSocket Bridge connection UI
+    showWebSocketBridgeUI() {
+        const deviceList = document.getElementById('deviceList');
+        const compat = this.getBrowserCompatibilityInfo();
+        
+        // Get saved bridge URL from localStorage
+        const savedUrl = localStorage.getItem('bridgeUrl') || 'ws://localhost:8080';
+        
+        deviceList.innerHTML = `
+            <div style="padding: 20px;">
+                <div style="margin-bottom: 20px;">
+                    <div style="color: #10b981; font-size: 14px; font-weight: 600; margin-bottom: 10px;">
+                        🌐 WebSocket Bridge Connection
+                    </div>
+                    <div style="font-size: 13px; color: #6b7280; margin-bottom: 15px;">
+                        Connect via a local bridge server. This method works in <strong>all browsers</strong>, including iOS Safari!
+                    </div>
+                </div>
+                
+                <div style="background: #f0f4ff; padding: 15px; border-radius: 8px; margin-bottom: 15px; font-size: 12px; color: #374151;">
+                    <strong>How it works:</strong><br>
+                    1. Run a bridge server on your computer/device<br>
+                    2. The bridge connects to your RFID reader via Bluetooth<br>
+                    3. Your web app connects to the bridge via WebSocket<br>
+                    4. Data flows: Reader ↔ Bridge ↔ Web App
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 13px;">
+                        Bridge Server URL:
+                    </label>
+                    <input type="text" id="bridgeUrlInput" 
+                           value="${savedUrl}" 
+                           placeholder="ws://localhost:8080"
+                           style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-family: monospace; font-size: 13px;">
+                    <div style="font-size: 11px; color: #6b7280; margin-top: 5px;">
+                        Examples: <code>ws://localhost:8080</code> or <code>ws://192.168.1.100:8080</code>
+                    </div>
+                </div>
+                
+                <button id="btnConnectBridge" class="btn btn-primary" style="width: 100%; margin-bottom: 10px;">
+                    Connect to Bridge
+                </button>
+                
+                <details style="margin-top: 15px; font-size: 12px;">
+                    <summary style="cursor: pointer; color: #667eea; font-weight: 600; margin-bottom: 10px;">
+                        📖 Setup Instructions
+                    </summary>
+                    <div style="padding: 15px; background: #f9fafb; border-radius: 6px; margin-top: 10px; line-height: 1.6;">
+                        <strong>Option 1: Python Bridge (Recommended for iOS)</strong><br>
+                        1. Install Python and run: <code>pip install websockets bleak</code><br>
+                        2. Download bridge_server.py from the project<br>
+                        3. Run: <code>python bridge_server.py</code><br>
+                        4. Connect your RFID reader<br>
+                        5. Enter bridge URL above and click Connect<br><br>
+                        
+                        <strong>Option 2: Node.js Bridge</strong><br>
+                        1. Install Node.js and run: <code>npm install ws</code><br>
+                        2. Run the bridge server<br>
+                        3. Connect using the URL above<br><br>
+                        
+                        <strong>For Mobile (iOS/Android):</strong><br>
+                        • Use your computer's IP address instead of localhost<br>
+                        • Example: <code>ws://192.168.1.100:8080</code><br>
+                        • Make sure your phone and computer are on the same Wi-Fi network
+                    </div>
+                </details>
+            </div>
+        `;
+        
+        // Add event listener for connect button
+        document.getElementById('btnConnectBridge').addEventListener('click', () => {
+            const url = document.getElementById('bridgeUrlInput').value.trim();
+            if (url) {
+                localStorage.setItem('bridgeUrl', url);
+                this.connectToWebSocketBridge(url);
+            } else {
+                this.showToast('Please enter a bridge URL');
+            }
+        });
+    }
+    
+    // Connect to WebSocket bridge
+    async connectToWebSocketBridge(url) {
+        this.hideDeviceModal();
+        this.updateConnectionStatus('connecting', 'Connecting to bridge server...');
+        this.bridgeUrl = url;
+        
+        try {
+            console.log('Connecting to WebSocket bridge:', url);
+            const ws = new WebSocket(url);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                this.wsSocket = ws;
+                this.isConnected = true;
+                this.connectionType = 'websocket';
+                this.device = { name: 'Bridge Server', id: url };
+                this.updateConnectionStatus('connected', `Bridge Server (${url})`);
+                this.updateUI();
+                this.showToast('Connected to bridge server');
+            };
+            
+            ws.onmessage = (event) => {
+                // Handle incoming data from bridge
+                let buffer;
+                if (event.data instanceof ArrayBuffer) {
+                    buffer = new Uint8Array(event.data);
+                } else if (event.data instanceof Blob) {
+                    // Convert Blob to ArrayBuffer
+                    event.data.arrayBuffer().then(ab => {
+                        buffer = new Uint8Array(ab);
+                        this.processIncomingData(buffer);
+                    });
+                    return;
+                } else if (typeof event.data === 'string') {
+                    try {
+                        const json = JSON.parse(event.data);
+                        if (json.bytes) {
+                            buffer = new Uint8Array(json.bytes);
+                        } else {
+                            console.log('Bridge message:', json);
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('Error parsing bridge message:', e);
+                        return;
+                    }
+                } else {
+                    console.error('Unknown message type:', typeof event.data);
+                    return;
+                }
+                
+                this.processIncomingData(buffer);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                this.updateConnectionStatus('disconnected', 'Bridge connection failed');
+                this.showToast('Failed to connect to bridge server. Make sure it\'s running.');
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket closed');
+                if (this.isConnected) {
+                    this.handleDisconnection();
+                }
+            };
+            
+            // Set timeout for connection
+            setTimeout(() => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    ws.close();
+                    this.updateConnectionStatus('disconnected', 'Connection timeout');
+                    this.showToast('Connection timeout. Check bridge server URL and ensure it\'s running.');
+                }
+            }, 10000);
+            
+        } catch (error) {
+            console.error('Error connecting to bridge:', error);
+            this.updateConnectionStatus('disconnected', 'Connection failed');
+            this.showToast('Connection failed: ' + error.message);
+        }
+    }
+    
+    // Process incoming data (works for both Web Bluetooth and WebSocket)
+    processIncomingData(buffer) {
+        // handleNotification now handles both Web Bluetooth event format and direct buffer
+        this.handleNotification(buffer);
+    }
+
     async disconnect() {
+        // Disconnect WebSocket if connected
+        if (this.wsSocket) {
+            try {
+                this.wsSocket.close();
+            } catch (error) {
+                console.error('WebSocket disconnect error:', error);
+            }
+            this.wsSocket = null;
+        }
+        
+        // Disconnect Web Bluetooth if connected
         if (this.device && this.device.gatt) {
             try {
                 await this.device.gatt.disconnect();
