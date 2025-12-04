@@ -586,118 +586,414 @@ class RFIDReader {
         this.hideDeviceModal();
         this.updateConnectionStatus('connecting', `Connecting to ${device.name}...`);
         
-        // Check if user wants auto-discover mode
-        const useAutoDiscover = localStorage.getItem('useAutoDiscover') === 'true';
+        // Use Smart Connect - tries all possible methods automatically
+        await this.smartConnect(device);
+    }
+    
+    // Smart Connect - tries ALL possible connection methods automatically
+    async smartConnect(device) {
+        this.lastDevice = device;
+        console.log('🚀 Smart Connect: Starting comprehensive connection attempt...');
+        this.showToast('🔍 Trying all connection methods...');
         
-        if (useAutoDiscover) {
-            await this.connectWithAutoDiscover(device);
-            return;
+        const connectionStrategies = [
+            { name: 'Default UUIDs', method: () => this.connectWithDefaultUUIDs(device) },
+            { name: 'Saved UUIDs', method: () => this.connectWithSavedUUIDs(device) },
+            { name: 'UUID Format Variations', method: () => this.connectWithUUIDVariations(device) },
+            { name: 'Quick Connect', method: () => this.connectWithQuickConnect(device) },
+            { name: 'Auto-Discover', method: () => this.connectWithAutoDiscoverWrapper(device) },
+            { name: 'Brute Force', method: () => this.connectWithBruteForce(device) }
+        ];
+        
+        for (const strategy of connectionStrategies) {
+            try {
+                console.log(`📡 Trying: ${strategy.name}...`);
+                this.updateConnectionStatus('connecting', `Trying ${strategy.name}...`);
+                
+                const result = await strategy.method();
+                if (result === true) {
+                    console.log(`✅ Success with ${strategy.name}!`);
+                    return; // Connected successfully!
+                }
+            } catch (error) {
+                console.log(`❌ ${strategy.name} failed:`, error.message);
+                // Continue to next strategy
+                continue;
+            }
         }
         
+        // If all strategies failed, show manual selection UI
+        console.warn('⚠️ All connection strategies failed, showing manual selection...');
+        await this.showAllConnectionMethodsUI(device);
+    }
+    
+    // Strategy 1: Connect with default UUIDs
+    async connectWithDefaultUUIDs(device) {
+        const defaultServiceUUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+        const defaultCharUUID = '0000fff1-0000-1000-8000-00805f9b34fb';
+        
         try {
-            console.log('Connecting to GATT server...');
             const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(defaultServiceUUID);
+            const characteristic = await service.getCharacteristic(defaultCharUUID);
             
-            // Try to get the expected service
-            let service = null;
-            try {
-                console.log('Getting primary service:', this.SERVICE_UUID);
-                service = await server.getPrimaryService(this.SERVICE_UUID);
-                this.server = service;
-            } catch (serviceError) {
-                console.warn('Expected service not found, automatically trying auto-discover...');
-                // Automatically try auto-discover - it will handle showing UI if it fails
-                await this.connectWithAutoDiscover(device);
-                return;
+            if (characteristic.properties.notify || characteristic.properties.indicate) {
+                await characteristic.startNotifications();
+                characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    this.handleNotification(event);
+                });
             }
-            
-            // Try to get the expected characteristic
-            try {
-                console.log('Getting characteristic:', this.CHARACTERISTIC_UUID);
-                this.characteristic = await service.getCharacteristic(this.CHARACTERISTIC_UUID);
-            } catch (charError) {
-                console.warn('Expected characteristic not found, trying auto-discover from current service...');
-                // Try to auto-discover characteristic in the current service
-                try {
-                    const characteristics = await service.getCharacteristics();
-                    
-                    // Try to find a characteristic with notify/indicate
-                    for (const char of characteristics) {
-                        if (char.properties.notify || char.properties.indicate) {
-                            try {
-                                await char.startNotifications();
-                                char.addEventListener('characteristicvaluechanged', (event) => {
-                                    this.handleNotification(event);
-                                });
-                                
-                                this.characteristic = char;
-                                this.CHARACTERISTIC_UUID = char.uuid;
-                                localStorage.setItem('customCharUUID', char.uuid);
-                                
-                                this.device = device;
-                                this.isConnected = true;
-                                this.updateConnectionStatus('connected', `${device.name || 'Device'} (Auto-discovered)`);
-                                this.updateUI();
-                                this.showToast('✅ Connected! Auto-discovered characteristic');
-                                
-                                device.addEventListener('gattserverdisconnected', () => {
-                                    this.handleDisconnection();
-                                });
-                                return;
-                            } catch (e) {
-                                continue;
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error('Auto-discover characteristic failed:', e);
-                }
-                
-                // If auto-discover failed, show selection UI
-                const characteristics = await service.getCharacteristics();
-                await this.showCharacteristicSelectionUI(device, service, characteristics, charError.message);
-                return;
-            }
-            
-            // Enable notifications for receiving data
-            console.log('Starting notifications...');
-            await this.characteristic.startNotifications();
-            this.characteristic.addEventListener('characteristicvaluechanged', (event) => {
-                this.handleNotification(event);
-            });
             
             this.device = device;
+            this.server = service;
+            this.characteristic = characteristic;
             this.isConnected = true;
-            this.updateConnectionStatus('connected', `${device.name || 'Device'} (${device.id})`);
+            this.updateConnectionStatus('connected', `${device.name || 'Device'} (Default UUIDs)`);
             this.updateUI();
-            this.showToast('Connected successfully');
-            console.log('Connection successful');
-
+            this.showToast('✅ Connected with default UUIDs!');
+            
             device.addEventListener('gattserverdisconnected', () => {
                 this.handleDisconnection();
             });
+            
+            return true;
         } catch (error) {
-            console.error('Connection error:', error);
-            this.lastDevice = device;
-            this.lastError = error;
+            throw error;
+        }
+    }
+    
+    // Strategy 2: Connect with saved UUIDs
+    async connectWithSavedUUIDs(device) {
+        const savedServiceUUID = localStorage.getItem('customServiceUUID');
+        const savedCharUUID = localStorage.getItem('customCharUUID');
+        
+        if (!savedServiceUUID || !savedCharUUID) {
+            throw new Error('No saved UUIDs');
+        }
+        
+        try {
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(savedServiceUUID);
+            const characteristic = await service.getCharacteristic(savedCharUUID);
             
-            // Check if this is a GATT-related error
-            const isGATTError = error.name && (
-                error.name.includes('GATT') || 
-                error.name === 'NetworkError' ||
-                error.name === 'InvalidStateError' ||
-                error.name === 'OperationError' ||
-                error.message && error.message.includes('GATT')
-            );
-            
-            if (isGATTError) {
-                // Show GATT error recovery UI
-                await this.showGATTErrorRecovery(device, error);
-            } else {
-                this.updateConnectionStatus('disconnected', 'Connection failed');
-                const errorMsg = this.handleGATTError(error, device);
-                this.showToast(errorMsg);
+            if (characteristic.properties.notify || characteristic.properties.indicate) {
+                await characteristic.startNotifications();
+                characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    this.handleNotification(event);
+                });
             }
+            
+            this.device = device;
+            this.server = service;
+            this.characteristic = characteristic;
+            this.isConnected = true;
+            this.updateConnectionStatus('connected', `${device.name || 'Device'} (Saved UUIDs)`);
+            this.updateUI();
+            this.showToast('✅ Connected with saved UUIDs!');
+            
+            device.addEventListener('gattserverdisconnected', () => {
+                this.handleDisconnection();
+            });
+            
+            return true;
+        } catch (error) {
+            throw error;
+        }
+    }
+    
+    // Strategy 3: UUID Format Variations (short vs long format)
+    async connectWithUUIDVariations(device) {
+        // Common UUIDs in both formats
+        const uuidVariations = [
+            // Standard RFID - Full format
+            { service: '0000fff0-0000-1000-8000-00805f9b34fb', char: '0000fff1-0000-1000-8000-00805f9b34fb' },
+            // Standard RFID - Short format
+            { service: 'fff0', char: 'fff1' },
+            // Nordic UART - Full format
+            { service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', char: '6e400003-b5a3-f393-e0a9-e50e24dcca9e' },
+            // Alternative variations
+            { service: '0000fff0-0000-1000-8000-00805f9b34fb', char: 'fff1' },
+            { service: 'fff0', char: '0000fff1-0000-1000-8000-00805f9b34fb' }
+        ];
+        
+        try {
+            const server = await device.gatt.connect();
+            
+            for (const variation of uuidVariations) {
+                try {
+                    // Normalize UUID format
+                    const serviceUUID = this.normalizeUUID(variation.service);
+                    const charUUID = this.normalizeUUID(variation.char);
+                    
+                    console.log(`Trying UUID variation: Service=${serviceUUID}, Char=${charUUID}`);
+                    
+                    const service = await server.getPrimaryService(serviceUUID);
+                    const characteristic = await service.getCharacteristic(charUUID);
+                    
+                    // Try to enable notifications
+                    if (characteristic.properties.notify || characteristic.properties.indicate) {
+                        await characteristic.startNotifications();
+                        characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                            this.handleNotification(event);
+                        });
+                    }
+                    
+                    this.device = device;
+                    this.server = service;
+                    this.characteristic = characteristic;
+                    this.SERVICE_UUID = serviceUUID;
+                    this.CHARACTERISTIC_UUID = charUUID;
+                    this.isConnected = true;
+                    
+                    localStorage.setItem('customServiceUUID', serviceUUID);
+                    localStorage.setItem('customCharUUID', charUUID);
+                    
+                    this.updateConnectionStatus('connected', `${device.name || 'Device'} (UUID Variation)`);
+                    this.updateUI();
+                    this.showToast('✅ Connected with UUID variation!');
+                    
+                    device.addEventListener('gattserverdisconnected', () => {
+                        this.handleDisconnection();
+                    });
+                    
+                    return true;
+                } catch (error) {
+                    continue; // Try next variation
+                }
+            }
+            
+            throw new Error('All UUID variations failed');
+        } catch (error) {
+            throw error;
+        }
+    }
+    
+    // Normalize UUID format (short to long)
+    normalizeUUID(uuid) {
+        // If it's already a full UUID, return as is
+        if (uuid.includes('-') && uuid.length === 36) {
+            return uuid;
+        }
+        
+        // If it's a short UUID (like 'fff0'), convert to full format
+        if (uuid.length === 4) {
+            return `0000${uuid}-0000-1000-8000-00805f9b34fb`;
+        }
+        
+        // If it's 8 chars (like '0000fff0'), also convert
+        if (uuid.length === 8) {
+            const short = uuid.substring(4);
+            return `0000${short}-0000-1000-8000-00805f9b34fb`;
+        }
+        
+        return uuid; // Return as-is if can't normalize
+    }
+    
+    // Strategy 4: Quick Connect (common UUID combinations)
+    async connectWithQuickConnect(device) {
+        try {
+            const server = await device.gatt.connect();
+            await this.quickConnectR6Pro(device, server);
+            
+            if (this.isConnected) {
+                return true;
+            }
+            throw new Error('Quick connect failed');
+        } catch (error) {
+            throw error;
+        }
+    }
+    
+    // Strategy 4: Auto-Discover (already exists, just wrap it)
+    async connectWithAutoDiscoverWrapper(device) {
+        try {
+            await this.connectWithAutoDiscover(device);
+            
+            if (this.isConnected) {
+                return true;
+            }
+            throw new Error('Auto-discover failed');
+        } catch (error) {
+            throw error;
+        }
+    }
+    
+    // Strategy 5: Brute Force - try ALL services and characteristics with ALL combinations
+    async connectWithBruteForce(device) {
+        try {
+            const server = await device.gatt.connect();
+            const allServices = await server.getPrimaryServices();
+            
+            console.log(`🔍 Brute Force: Found ${allServices.length} services`);
+            
+            // Try each service
+            for (const service of allServices) {
+                try {
+                    const characteristics = await service.getCharacteristics();
+                    console.log(`  Service ${service.uuid}: ${characteristics.length} characteristics`);
+                    
+                    // Try each characteristic
+                    for (const char of characteristics) {
+                        // Try different connection methods for each characteristic
+                        const methods = [
+                            { name: 'notify', try: () => this.tryConnectWithNotify(device, service, char) },
+                            { name: 'indicate', try: () => this.tryConnectWithIndicate(device, service, char) },
+                            { name: 'read', try: () => this.tryConnectWithRead(device, service, char) },
+                            { name: 'write', try: () => this.tryConnectWithWrite(device, service, char) }
+                        ];
+                        
+                        for (const method of methods) {
+                            if (char.properties[method.name] || method.name === 'write' && char.properties.writeWithoutResponse) {
+                                try {
+                                    const result = await method.try();
+                                    if (result) {
+                                        console.log(`✅ Brute Force success with ${service.uuid}/${char.uuid} using ${method.name}`);
+                                        return true;
+                                    }
+                                } catch (e) {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    continue;
+                }
+            }
+            
+            throw new Error('Brute force failed - no suitable combination found');
+        } catch (error) {
+            throw error;
+        }
+    }
+    
+    // Helper: Try connecting with notify
+    async tryConnectWithNotify(device, service, char) {
+        if (!char.properties.notify) return false;
+        
+        await char.startNotifications();
+        char.addEventListener('characteristicvaluechanged', (event) => {
+            this.handleNotification(event);
+        });
+        
+        this.device = device;
+        this.server = service;
+        this.characteristic = char;
+        this.SERVICE_UUID = service.uuid;
+        this.CHARACTERISTIC_UUID = char.uuid;
+        this.isConnected = true;
+        
+        localStorage.setItem('customServiceUUID', service.uuid);
+        localStorage.setItem('customCharUUID', char.uuid);
+        
+        this.updateConnectionStatus('connected', `${device.name || 'Device'} (Brute Force: Notify)`);
+        this.updateUI();
+        this.showToast('✅ Connected! (Brute Force)');
+        
+        device.addEventListener('gattserverdisconnected', () => {
+            this.handleDisconnection();
+        });
+        
+        return true;
+    }
+    
+    // Helper: Try connecting with indicate
+    async tryConnectWithIndicate(device, service, char) {
+        if (!char.properties.indicate) return false;
+        
+        // Similar to notify
+        await char.startNotifications();
+        char.addEventListener('characteristicvaluechanged', (event) => {
+            this.handleNotification(event);
+        });
+        
+        this.device = device;
+        this.server = service;
+        this.characteristic = char;
+        this.SERVICE_UUID = service.uuid;
+        this.CHARACTERISTIC_UUID = char.uuid;
+        this.isConnected = true;
+        
+        localStorage.setItem('customServiceUUID', service.uuid);
+        localStorage.setItem('customCharUUID', char.uuid);
+        
+        this.updateConnectionStatus('connected', `${device.name || 'Device'} (Brute Force: Indicate)`);
+        this.updateUI();
+        this.showToast('✅ Connected! (Brute Force)');
+        
+        device.addEventListener('gattserverdisconnected', () => {
+            this.handleDisconnection();
+        });
+        
+        return true;
+    }
+    
+    // Helper: Try connecting with read-only
+    async tryConnectWithRead(device, service, char) {
+        if (!char.properties.read) return false;
+        
+        // For read-only, we'll try to read it first as a test
+        try {
+            await char.readValue();
+        } catch (e) {
+            return false;
+        }
+        
+        this.device = device;
+        this.server = service;
+        this.characteristic = char;
+        this.SERVICE_UUID = service.uuid;
+        this.CHARACTERISTIC_UUID = char.uuid;
+        this.isConnected = true;
+        
+        localStorage.setItem('customServiceUUID', service.uuid);
+        localStorage.setItem('customCharUUID', char.uuid);
+        
+        this.updateConnectionStatus('connected', `${device.name || 'Device'} (Brute Force: Read)`);
+        this.updateUI();
+        this.showToast('✅ Connected! (Read-only mode)');
+        
+        device.addEventListener('gattserverdisconnected', () => {
+            this.handleDisconnection();
+        });
+        
+        return true;
+    }
+    
+    // Helper: Try connecting with write-only
+    async tryConnectWithWrite(device, service, char) {
+        if (!char.properties.write && !char.properties.writeWithoutResponse) return false;
+        
+        this.device = device;
+        this.server = service;
+        this.characteristic = char;
+        this.SERVICE_UUID = service.uuid;
+        this.CHARACTERISTIC_UUID = char.uuid;
+        this.isConnected = true;
+        
+        localStorage.setItem('customServiceUUID', service.uuid);
+        localStorage.setItem('customCharUUID', char.uuid);
+        
+        this.updateConnectionStatus('connected', `${device.name || 'Device'} (Brute Force: Write)`);
+        this.updateUI();
+        this.showToast('✅ Connected! (Write-only mode)');
+        
+        device.addEventListener('gattserverdisconnected', () => {
+            this.handleDisconnection();
+        });
+        
+        return true;
+    }
+    
+    // Show UI with all connection methods as options
+    async showAllConnectionMethodsUI(device) {
+        try {
+            const server = await device.gatt.connect();
+            const services = await server.getPrimaryServices();
+            
+            await this.showServiceSelectionUI(device, server, services, 'All automatic methods failed. Please select manually or try one of the options below.');
+        } catch (error) {
+            await this.showGATTErrorRecovery(device, error);
         }
     }
     
