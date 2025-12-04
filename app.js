@@ -3,7 +3,8 @@ class RFIDReader {
     constructor() {
         this.device = null;
         this.server = null;
-        this.characteristic = null;
+        this.characteristic = null; // For receiving notifications
+        this.writeCharacteristic = null; // For sending commands (may be same or different)
         this.isConnected = false;
         this.isScanning = false;
         this.tagList = [];
@@ -1197,50 +1198,133 @@ class RFIDReader {
                             indicate: char.properties.indicate
                         });
                         
-                        // Try to connect - prefer notify/indicate, but also try others as fallback
+                        // First, scan all characteristics to find the best match
+                        const hasNotify = char.properties.notify || char.properties.indicate;
+                        const hasWrite = char.properties.write || char.properties.writeWithoutResponse;
+                        console.log(`Checking characteristic: ${char.uuid}, notify: ${hasNotify}, write: ${hasWrite}`);
+                    }
+                    
+                    // NOW: Try to connect with best characteristic
+                    // Priority 1: Characteristics with BOTH notify AND write
+                    let perfectChar = null;
+                    let notifyChar = null;
+                    let writeChar = null;
+                    
+                    for (const char of characteristics) {
                         const hasNotify = char.properties.notify || char.properties.indicate;
                         const hasWrite = char.properties.write || char.properties.writeWithoutResponse;
                         
-                        if (hasNotify || hasWrite) {
-                            console.log(`✅ Found characteristic: ${char.uuid} (notify: ${hasNotify}, write: ${hasWrite})`);
+                        if (hasNotify && hasWrite && !perfectChar) {
+                            perfectChar = char;
+                            console.log(`⭐ PERFECT: ${char.uuid} (notify + write)`);
+                        }
+                        if (hasNotify && !notifyChar) {
+                            notifyChar = char;
+                        }
+                        if (hasWrite && !writeChar) {
+                            writeChar = char;
+                        }
+                    }
+                    
+                    // Try perfect characteristic first (has both)
+                    if (perfectChar) {
+                        try {
+                            await perfectChar.startNotifications();
+                            perfectChar.addEventListener('characteristicvaluechanged', (event) => {
+                                this.handleNotification(event);
+                            });
                             
-                            try {
-                                // If it has notify, enable notifications
-                                if (hasNotify) {
-                                    await char.startNotifications();
-                                    char.addEventListener('characteristicvaluechanged', (event) => {
-                                        this.handleNotification(event);
-                                    });
-                                    console.log('Enabled notifications on characteristic');
-                                }
-                                
-                                // Success! Use this service and characteristic
-                                this.device = device;
-                                this.server = service;
-                                this.characteristic = char;
-                                this.SERVICE_UUID = service.uuid;
-                                this.CHARACTERISTIC_UUID = char.uuid;
-                                
-                                // Save for future use
-                                localStorage.setItem('customServiceUUID', service.uuid);
-                                localStorage.setItem('customCharUUID', char.uuid);
-                                
-                                this.isConnected = true;
-                                this.updateConnectionStatus('connected', `${device.name || 'Device'} (Auto-discovered)`);
-                                this.updateUI();
-                                this.showToast('✅ Connected! Auto-discovered service and characteristic');
-                                console.log('✅ Auto-discover connection successful!');
-                                
-                                device.addEventListener('gattserverdisconnected', () => {
-                                    this.handleDisconnection();
-                                });
-                                
-                                return; // Success - already connected!
-                            } catch (notifyError) {
-                                console.warn(`Could not enable notifications on ${char.uuid}:`, notifyError);
-                                // Continue trying other characteristics
-                                continue;
-                            }
+                            this.device = device;
+                            this.server = service;
+                            this.characteristic = perfectChar;
+                            this.writeCharacteristic = perfectChar; // Same one for both
+                            this.SERVICE_UUID = service.uuid;
+                            this.CHARACTERISTIC_UUID = perfectChar.uuid;
+                            
+                            localStorage.setItem('customServiceUUID', service.uuid);
+                            localStorage.setItem('customCharUUID', perfectChar.uuid);
+                            
+                            this.isConnected = true;
+                            this.updateConnectionStatus('connected', `${device.name || 'Device'} (Full functionality)`);
+                            this.updateUI();
+                            this.showToast('✅ Connected! Full functionality (read + write)');
+                            console.log('✅ Connected with perfect characteristic!');
+                            
+                            device.addEventListener('gattserverdisconnected', () => {
+                                this.handleDisconnection();
+                            });
+                            
+                            return; // Success!
+                        } catch (error) {
+                            console.warn('Perfect char failed, trying alternatives...', error);
+                        }
+                    }
+                    
+                    // Try separate notify + write characteristics
+                    if (notifyChar && writeChar && notifyChar.uuid !== writeChar.uuid) {
+                        try {
+                            await notifyChar.startNotifications();
+                            notifyChar.addEventListener('characteristicvaluechanged', (event) => {
+                                this.handleNotification(event);
+                            });
+                            
+                            this.device = device;
+                            this.server = service;
+                            this.characteristic = notifyChar;
+                            this.writeCharacteristic = writeChar;
+                            this.SERVICE_UUID = service.uuid;
+                            this.CHARACTERISTIC_UUID = notifyChar.uuid;
+                            
+                            localStorage.setItem('customServiceUUID', service.uuid);
+                            localStorage.setItem('customCharUUID', notifyChar.uuid);
+                            
+                            this.isConnected = true;
+                            this.updateConnectionStatus('connected', `${device.name || 'Device'} (Separate RX/TX)`);
+                            this.updateUI();
+                            this.showToast('✅ Connected! Using separate read/write characteristics');
+                            console.log('✅ Connected with separate characteristics!');
+                            
+                            device.addEventListener('gattserverdisconnected', () => {
+                                this.handleDisconnection();
+                            });
+                            
+                            return; // Success!
+                        } catch (error) {
+                            console.warn('Separate chars failed, trying fallback...', error);
+                        }
+                    }
+                    
+                    // Fallback: Use notify-only (can receive but not send commands)
+                    if (notifyChar) {
+                        try {
+                            await notifyChar.startNotifications();
+                            notifyChar.addEventListener('characteristicvaluechanged', (event) => {
+                                this.handleNotification(event);
+                            });
+                            
+                            this.device = device;
+                            this.server = service;
+                            this.characteristic = notifyChar;
+                            this.writeCharacteristic = null; // No write capability
+                            this.SERVICE_UUID = service.uuid;
+                            this.CHARACTERISTIC_UUID = notifyChar.uuid;
+                            
+                            localStorage.setItem('customServiceUUID', service.uuid);
+                            localStorage.setItem('customCharUUID', notifyChar.uuid);
+                            
+                            this.isConnected = true;
+                            this.updateConnectionStatus('connected', `${device.name || 'Device'} (Receive only - no commands)`);
+                            this.updateUI();
+                            this.showToast('⚠️ Connected for receiving only. Device buttons work, but commands (Set Power, etc.) won\'t work. Reconnect and select a characteristic with Write property for commands.');
+                            console.log('⚠️ Connected with notify-only characteristic (commands disabled)');
+                            
+                            device.addEventListener('gattserverdisconnected', () => {
+                                this.handleDisconnection();
+                            });
+                            
+                            return; // Success but limited
+                        } catch (error) {
+                            console.warn('Notify-only connection failed:', error);
                         }
                     }
                 } catch (error) {
@@ -1825,15 +1909,44 @@ class RFIDReader {
     // Send command to RFID reader
     async sendCommand(commandBytes) {
         // Send via Web Bluetooth
-        if (!this.characteristic) {
+        // Try writeCharacteristic first (if we have a separate one for writing)
+        // Otherwise use the main characteristic (if it supports write)
+        const charToUse = this.writeCharacteristic || this.characteristic;
+        
+        if (!charToUse) {
             throw new Error('Not connected to device');
         }
         
         try {
-            await this.characteristic.writeValue(commandBytes);
+            // Check if characteristic supports write
+            if (!charToUse.properties.write && !charToUse.properties.writeWithoutResponse) {
+                throw new Error('GATT operation not permitted: Characteristic does not support write operations. Please reconnect and select a characteristic with Write property.');
+            }
+            
+            // Use writeWithoutResponse if available (faster), otherwise use write
+            if (charToUse.properties.writeWithoutResponse) {
+                await charToUse.writeValueWithoutResponse(commandBytes);
+            } else {
+                await charToUse.writeValue(commandBytes);
+            }
+            
             console.log('Command sent:', commandBytes);
         } catch (error) {
             console.error('Error sending command:', error);
+            
+            // Provide helpful error message
+            if (error.message && (error.message.includes('not permitted') || error.message.includes('GATT'))) {
+                const errorMsg = '⚠️ Cannot send commands: The connected characteristic does not support writing.\n\n' +
+                    '🔧 Solutions:\n' +
+                    '1. Disconnect and reconnect\n' +
+                    '2. Select a characteristic with "Write" property when connecting\n' +
+                    '3. OR use device buttons only (they work fine for scanning!)\n\n' +
+                    'Note: Receiving data from device buttons works perfectly. This only affects sending commands from the web app.';
+                
+                this.showToast(errorMsg);
+                throw new Error(errorMsg);
+            }
+            
             throw error;
         }
     }
