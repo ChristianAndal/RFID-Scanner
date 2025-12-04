@@ -603,13 +603,9 @@ class RFIDReader {
                 service = await server.getPrimaryService(this.SERVICE_UUID);
                 this.server = service;
             } catch (serviceError) {
-                console.warn('Expected service not found, discovering all services...');
-                // Discover all available services
-                const services = await server.getPrimaryServices();
-                console.log('Available services:', services.map(s => ({ uuid: s.uuid })));
-                
-                // Show service selection UI with auto-discover option
-                await this.showServiceSelectionUI(device, server, services, serviceError.message);
+                console.warn('Expected service not found, automatically trying auto-discover...');
+                // Automatically try auto-discover - it will handle showing UI if it fails
+                await this.connectWithAutoDiscover(device);
                 return;
             }
             
@@ -618,12 +614,45 @@ class RFIDReader {
                 console.log('Getting characteristic:', this.CHARACTERISTIC_UUID);
                 this.characteristic = await service.getCharacteristic(this.CHARACTERISTIC_UUID);
             } catch (charError) {
-                console.warn('Expected characteristic not found, discovering all characteristics...');
-                // Discover all available characteristics
-                const characteristics = await service.getCharacteristics();
-                console.log('Available characteristics:', characteristics.map(c => ({ uuid: c.uuid, properties: c.properties })));
+                console.warn('Expected characteristic not found, trying auto-discover from current service...');
+                // Try to auto-discover characteristic in the current service
+                try {
+                    const characteristics = await service.getCharacteristics();
+                    
+                    // Try to find a characteristic with notify/indicate
+                    for (const char of characteristics) {
+                        if (char.properties.notify || char.properties.indicate) {
+                            try {
+                                await char.startNotifications();
+                                char.addEventListener('characteristicvaluechanged', (event) => {
+                                    this.handleNotification(event);
+                                });
+                                
+                                this.characteristic = char;
+                                this.CHARACTERISTIC_UUID = char.uuid;
+                                localStorage.setItem('customCharUUID', char.uuid);
+                                
+                                this.device = device;
+                                this.isConnected = true;
+                                this.updateConnectionStatus('connected', `${device.name || 'Device'} (Auto-discovered)`);
+                                this.updateUI();
+                                this.showToast('✅ Connected! Auto-discovered characteristic');
+                                
+                                device.addEventListener('gattserverdisconnected', () => {
+                                    this.handleDisconnection();
+                                });
+                                return;
+                            } catch (e) {
+                                continue;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('Auto-discover characteristic failed:', e);
+                }
                 
-                // Show characteristic selection UI with auto-discover option
+                // If auto-discover failed, show selection UI
+                const characteristics = await service.getCharacteristics();
                 await this.showCharacteristicSelectionUI(device, service, characteristics, charError.message);
                 return;
             }
@@ -728,7 +757,7 @@ class RFIDReader {
                                     this.handleDisconnection();
                                 });
                                 
-                                return; // Success!
+                                return; // Success - already connected!
                             } catch (notifyError) {
                                 console.warn(`Could not enable notifications on ${char.uuid}:`, notifyError);
                                 continue;
@@ -741,17 +770,25 @@ class RFIDReader {
                 }
             }
             
-            // If we get here, we couldn't auto-discover
+            // If we get here, auto-discover couldn't find a suitable combination
             console.warn('Auto-discover failed: No suitable service/characteristic found');
             this.updateConnectionStatus('disconnected', 'Auto-discover failed');
             
-            // Show manual selection UI
-            await this.showServiceSelectionUI(device, server, allServices, 'Auto-discover could not find a suitable service. Please select manually.');
+            // Show manual selection UI automatically
+            await this.showServiceSelectionUI(device, server, allServices, 'Auto-discover tried but couldn\'t find a suitable service. Please select manually.');
             
         } catch (error) {
             console.error('Auto-discover error:', error);
             this.updateConnectionStatus('disconnected', 'Auto-discover failed');
-            this.showToast('Auto-discover failed: ' + error.message);
+            
+            // Try to show manual selection UI
+            try {
+                const server = await device.gatt.connect();
+                const services = await server.getPrimaryServices();
+                await this.showServiceSelectionUI(device, server, services, 'Auto-discover failed. Please select manually.');
+            } catch (e) {
+                this.showToast('Connection failed: ' + error.message);
+            }
         }
     }
     
@@ -775,13 +812,13 @@ class RFIDReader {
                         🔍 Auto-Discover Service & Characteristic
                     </button>
                 </div>
-                <div style="color: #ef4444; font-weight: 600; margin-bottom: 15px; font-size: 16px;">
-                    ⚠️ Service UUID Not Found
-                </div>
-                <div style="background: #fef3c7; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; line-height: 1.6;">
-                    <strong>Expected Service:</strong><br>
-                    <code style="word-break: break-all; font-size: 11px;">${this.SERVICE_UUID}</code><br><br>
-                    <strong>Error:</strong> ${errorMessage}
+                <div style="background: #fef3c7; padding: 15px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; line-height: 1.6;">
+                    <div style="font-weight: 600; color: #92400e; margin-bottom: 8px;">
+                        ℹ️ Auto-Discover Attempted
+                    </div>
+                    <div style="color: #78350f;">
+                        The app tried to automatically find the right service and characteristic, but couldn't find a suitable match. Please select manually from the list below.
+                    </div>
                 </div>
                 <div style="margin-bottom: 15px;">
                     <strong style="display: block; margin-bottom: 10px;">Or manually select from available services:</strong>
