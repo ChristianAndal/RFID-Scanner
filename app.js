@@ -725,16 +725,22 @@ class RFIDReader {
                             indicate: char.properties.indicate
                         });
                         
-                        // Prefer characteristics with notify (for receiving data)
-                        if (char.properties.notify || char.properties.indicate) {
-                            console.log(`✅ Found suitable characteristic: ${char.uuid} (has notify/indicate)`);
+                        // Try to connect - prefer notify/indicate, but also try others as fallback
+                        const hasNotify = char.properties.notify || char.properties.indicate;
+                        const hasWrite = char.properties.write || char.properties.writeWithoutResponse;
+                        
+                        if (hasNotify || hasWrite) {
+                            console.log(`✅ Found characteristic: ${char.uuid} (notify: ${hasNotify}, write: ${hasWrite})`);
                             
                             try {
-                                // Try to enable notifications
-                                await char.startNotifications();
-                                char.addEventListener('characteristicvaluechanged', (event) => {
-                                    this.handleNotification(event);
-                                });
+                                // If it has notify, enable notifications
+                                if (hasNotify) {
+                                    await char.startNotifications();
+                                    char.addEventListener('characteristicvaluechanged', (event) => {
+                                        this.handleNotification(event);
+                                    });
+                                    console.log('Enabled notifications on characteristic');
+                                }
                                 
                                 // Success! Use this service and characteristic
                                 this.device = device;
@@ -760,6 +766,7 @@ class RFIDReader {
                                 return; // Success - already connected!
                             } catch (notifyError) {
                                 console.warn(`Could not enable notifications on ${char.uuid}:`, notifyError);
+                                // Continue trying other characteristics
                                 continue;
                             }
                         }
@@ -801,15 +808,20 @@ class RFIDReader {
             <div style="padding: 20px;">
                 <div style="background: #e0f2fe; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 2px solid #0ea5e9;">
                     <div style="font-weight: 600; color: #0369a1; margin-bottom: 8px; font-size: 15px;">
-                        🔍 Try Auto-Discover?
+                        ⚡ Quick Connect Options
                     </div>
-                    <div style="font-size: 12px; color: #0c4a6e; margin-bottom: 10px;">
-                        Let the app automatically find the right service and characteristic for you!
+                    <div style="font-size: 12px; color: #0c4a6e; margin-bottom: 10px; line-height: 1.5;">
+                        Try these common R6 PRO combinations automatically:
                     </div>
-                    <button onclick="window.rfidReader.connectWithAutoDiscover(window.rfidReader.pendingDevice)" 
+                    <button onclick="window.rfidReader.quickConnectR6Pro(window.rfidReader.pendingDevice, window.rfidReader.pendingServer)" 
                             class="btn btn-primary" 
-                            style="width: 100%; padding: 12px; font-weight: 600;">
-                        🔍 Auto-Discover Service & Characteristic
+                            style="width: 100%; padding: 12px; font-weight: 600; margin-bottom: 8px;">
+                        ⚡ Quick Connect (Try Common UUIDs)
+                    </button>
+                    <button onclick="window.rfidReader.connectWithAutoDiscover(window.rfidReader.pendingDevice)" 
+                            class="btn btn-secondary" 
+                            style="width: 100%; padding: 10px; font-weight: 500;">
+                        🔍 Full Auto-Discover (Scan All)
                     </button>
                 </div>
                 <div style="background: #fef3c7; padding: 15px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; line-height: 1.6;">
@@ -817,7 +829,7 @@ class RFIDReader {
                         ℹ️ Auto-Discover Attempted
                     </div>
                     <div style="color: #78350f;">
-                        The app tried to automatically find the right service and characteristic, but couldn't find a suitable match. Please select manually from the list below.
+                        The app tried to automatically find the right service and characteristic, but couldn't find a suitable match. Try Quick Connect above or select manually from the list below.
                     </div>
                 </div>
                 <div style="margin-bottom: 15px;">
@@ -964,6 +976,125 @@ class RFIDReader {
         localStorage.setItem('customCharUUID', characteristicUUID);
         console.log('Selected characteristic UUID:', characteristicUUID);
         this.connectWithSelectedService();
+    }
+    
+    // Quick Connect - tries common R6 PRO UUID combinations
+    async quickConnectR6Pro(device, server) {
+        if (!device || !server) {
+            this.showToast('Device or server not available');
+            return;
+        }
+        
+        this.hideDeviceModal();
+        this.updateConnectionStatus('connecting', `Quick connecting to ${device.name}...`);
+        this.showToast('⚡ Trying common R6 PRO UUID combinations...');
+        
+        // Common UUID combinations for R6 PRO
+        const commonCombos = [
+            {
+                service: '0000fff0-0000-1000-8000-00805f9b34fb',
+                characteristic: '0000fff1-0000-1000-8000-00805f9b34fb',
+                name: 'Standard RFID Service'
+            },
+            {
+                service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+                characteristic: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+                name: 'Nordic UART Service (RX/Notify)'
+            },
+            {
+                service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+                characteristic: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+                name: 'Nordic UART Service (TX/Write)'
+            },
+            {
+                service: '0000fff0-0000-1000-8000-00805f9b34fb',
+                characteristic: '0000fff2-0000-1000-8000-00805f9b34fb',
+                name: 'Standard RFID Service (Alt Char)'
+            }
+        ];
+        
+        try {
+            // Get all available services first
+            const allServices = await server.getPrimaryServices();
+            const serviceMap = new Map();
+            allServices.forEach(s => serviceMap.set(s.uuid, s));
+            
+            console.log('⚡ Quick Connect: Trying common combinations...');
+            
+            // Try each common combination
+            for (const combo of commonCombos) {
+                try {
+                    console.log(`Trying: ${combo.name} (Service: ${combo.service}, Char: ${combo.characteristic})`);
+                    
+                    const service = serviceMap.get(combo.service);
+                    if (!service) {
+                        console.log(`Service ${combo.service} not found, skipping...`);
+                        continue;
+                    }
+                    
+                    try {
+                        const char = await service.getCharacteristic(combo.characteristic);
+                        console.log(`✅ Found characteristic ${combo.characteristic}`);
+                        
+                        // Try to enable notifications if supported
+                        try {
+                            if (char.properties.notify || char.properties.indicate) {
+                                await char.startNotifications();
+                                char.addEventListener('characteristicvaluechanged', (event) => {
+                                    this.handleNotification(event);
+                                });
+                                console.log('✅ Enabled notifications');
+                            }
+                        } catch (notifyError) {
+                            console.warn('Could not enable notifications, but continuing...', notifyError);
+                        }
+                        
+                        // Success!
+                        this.device = device;
+                        this.server = service;
+                        this.characteristic = char;
+                        this.SERVICE_UUID = combo.service;
+                        this.CHARACTERISTIC_UUID = combo.characteristic;
+                        
+                        // Save for future use
+                        localStorage.setItem('customServiceUUID', combo.service);
+                        localStorage.setItem('customCharUUID', combo.characteristic);
+                        
+                        this.isConnected = true;
+                        this.updateConnectionStatus('connected', `${device.name || 'Device'} (Quick Connect: ${combo.name})`);
+                        this.updateUI();
+                        this.showToast(`✅ Connected! Using ${combo.name}`);
+                        console.log(`✅ Quick Connect successful with ${combo.name}!`);
+                        
+                        device.addEventListener('gattserverdisconnected', () => {
+                            this.handleDisconnection();
+                        });
+                        
+                        return; // Success!
+                        
+                    } catch (charError) {
+                        console.log(`Characteristic ${combo.characteristic} not found, trying next...`);
+                        continue;
+                    }
+                    
+                } catch (error) {
+                    console.warn(`Error trying ${combo.name}:`, error);
+                    continue;
+                }
+            }
+            
+            // If we get here, none of the common combinations worked
+            console.warn('Quick Connect: No common combinations worked');
+            this.updateConnectionStatus('disconnected', 'Quick Connect failed');
+            
+            // Show manual selection UI
+            await this.showServiceSelectionUI(device, server, allServices, 'Quick Connect tried common UUIDs but none worked. Please select manually.');
+            
+        } catch (error) {
+            console.error('Quick Connect error:', error);
+            this.updateConnectionStatus('disconnected', 'Quick Connect failed');
+            this.showToast('Quick Connect failed: ' + error.message);
+        }
     }
     
     // Connect with custom UUIDs
