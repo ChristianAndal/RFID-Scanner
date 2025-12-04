@@ -33,6 +33,25 @@ class RFIDReader {
         this.pendingDevice = null;
         this.pendingService = null;
         
+        // Device presets for known RFID readers
+        this.devicePresets = {
+            'R6 PRO': {
+                name: 'R6 PRO UHF Sealed Reader',
+                serviceUUID: '0000fff0-0000-1000-8000-00805f9b34fb',
+                characteristicUUID: '0000fff1-0000-1000-8000-00805f9b34fb',
+                alternative: {
+                    serviceUUID: '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service
+                    characteristicUUID: '6e400003-b5a3-f393-e0a9-e50e24dcca9e' // RX (Notify)
+                },
+                deviceName: 'Nordic_UART_CW'
+            },
+            'Generic': {
+                name: 'Generic RFID Reader',
+                serviceUUID: '0000fff0-0000-1000-8000-00805f9b34fb',
+                characteristicUUID: '0000fff1-0000-1000-8000-00805f9b34fb'
+            }
+        };
+        
         // RFID Command Protocol
         // NOTE: These are GENERIC commands based on common UHF RFID protocols
         // You MUST get actual command bytes from your device manufacturer
